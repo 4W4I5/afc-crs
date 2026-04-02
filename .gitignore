@@ -1,0 +1,40 @@
+**/.env
+*/.env
+
+**/logs
+*.log
+
+**/tmp_*
+**/test_*
+!FuzzingBrain-v2/v2/tests/test_*
+
+**/__pycache__/
+*.pyc
+*.pyo
+
+**/coverage.xml
+**/coverage.json
+**/.coverage
+
+**/.benchmarks
+**/.benchmark_results
+**/.pytest_cache
+
+# Go test coverage
+**/*.out
+**/*.test
+
+# Go compiled binaries
+crs/local
+crs/server
+crs/worker
+
+document/
+
+**/WORKFLOW/*
+
+**/workspace/*
+
+# POV and Patch outputs
+pov/
+patch/package-lock.json
