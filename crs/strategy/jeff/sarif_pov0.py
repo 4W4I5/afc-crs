@@ -62,8 +62,8 @@ OPENAI_MODEL_O4_MINI = "gpt-5.4-mini"
 OPENAI_MODEL_41 = "gpt-4.1"
 # OPENAI_MODEL = "gpt-4o-2024-11-20"
 # CLAUDE_MODEL = "gpt-4o-mini"
-CLAUDE_MODEL = "claude-sonnet-4"
-CLAUDE_MODEL_35 = "claude-sonnet-4"
+CLAUDE_MODEL = "claude-sonnet-4.6"
+CLAUDE_MODEL_35 = "claude-sonnet-4.6"
 GEMINI_MODEL_PRO_25_0325 = "gemini-2.5-pro"
 GEMINI_MODEL_PRO_25_0506 = "gemini-2.5-pro"
 GEMINI_MODEL_PRO_25 = "gemini-2.5-pro"
@@ -72,8 +72,8 @@ GEMINI_MODEL_PRO = "gemini-2.5-pro"
 GEMINI_MODEL_FLASH = "gemini-3-flash-preview"
 GEMINI_MODEL_FLASH_LITE = "gemini-3-flash-preview"
 GROK_MODEL = "grok-code-fast-1"
-CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.5"
-CLAUDE_MODEL_OPUS_4 = "claude-opus-4.5"
+CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.6"
+CLAUDE_MODEL_OPUS_4 = "claude-opus-4.6"
 MODELS = [CLAUDE_MODEL, OPENAI_MODEL, CLAUDE_MODEL_OPUS_4, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25]
 CLAUDE_MODEL = CLAUDE_MODEL_SONNET_45
 OPENAI_MODEL = CLAUDE_MODEL_SONNET_45
@@ -5803,3 +5803,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

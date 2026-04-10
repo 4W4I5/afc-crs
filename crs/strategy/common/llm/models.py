@@ -14,10 +14,10 @@ OPENAI_MODEL_41 = "gpt-4.1"
 OPENAI_MODEL_45 = "gpt-5.1"
 
 # Claude Models
-CLAUDE_MODEL = "claude-sonnet-4"
-CLAUDE_MODEL_35 = "claude-sonnet-4"
-CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.5"
-CLAUDE_MODEL_OPUS_4 = "claude-opus-4.5"
+CLAUDE_MODEL = "claude-sonnet-4.6"
+CLAUDE_MODEL_35 = "claude-sonnet-4.6"
+CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.6"
+CLAUDE_MODEL_OPUS_4 = "claude-opus-4.6"
 
 # Gemini Models
 GEMINI_MODEL_PRO_25_0325 = "gemini-2.5-pro"
@@ -59,3 +59,4 @@ def get_fallback_model(current_model: str, tried_models: set) -> str:
 
     # If all fallback models have been tried, return None
     return None
+

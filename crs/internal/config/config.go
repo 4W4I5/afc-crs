@@ -51,7 +51,7 @@ type ServicesConfig struct {
 
 // AIConfig holds AI model configuration (for local mode)
 type AIConfig struct {
-	Model           string `envconfig:"AI_MODEL" default:"claude-sonnet-4"`
+	Model           string `envconfig:"AI_MODEL" default:"claude-sonnet-4.6"`
 	AnthropicAPIKey string `envconfig:"ANTHROPIC_API_KEY"`
 	GeminiAPIKey    string `envconfig:"GEMINI_API_KEY"`
 	OpenAIAPIKey    string `envconfig:"OPENAI_API_KEY"`
@@ -409,3 +409,4 @@ func (f *FuzzerConfig) ShouldUseSanitizer(fuzzerPath string) bool {
 	sanitizerDir := fmt.Sprintf("-%s/", f.PreferredSanitizer)
 	return strings.Contains(fuzzerPath, sanitizerDir)
 }
+

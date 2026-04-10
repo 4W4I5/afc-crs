@@ -245,7 +245,7 @@ Jazzer can detect (non-exhaustive):
         {"role": "user", "content": prompt}
     ]
     start = time.time()
-    raw, ok = llm_client.call(messages, llm_client.config.models[0] if llm_client.config.models else "claude-sonnet-4.5")
+    raw, ok = llm_client.call(messages, llm_client.config.models[0] if llm_client.config.models else "claude-sonnet-4.6")
     duration = time.time() - start
 
     if not ok:
@@ -506,3 +506,4 @@ def extract_call_paths_from_analysis_service(
 
     print(f"Received {len(call_paths)} call_paths\n")
     return call_paths
+

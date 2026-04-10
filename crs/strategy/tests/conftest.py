@@ -185,7 +185,7 @@ def mock_config() -> Mock:
     config.sanitizer = "address"
     config.max_iterations = 5
     config.fuzzing_timeout_minutes = 45
-    config.models = ["claude-sonnet-4", "claude-opus-4.5"]
+    config.models = ["claude-sonnet-4.6", "claude-opus-4.6"]
     config.pov_phase = 0
     config.project_dir = "/test/project"
     config.fuzz_dir = "/test/fuzz"
@@ -402,3 +402,4 @@ def pytest_collection_modifyitems(config, items):
         # Add 'regression' marker to tests in tests/regression/
         elif "tests/regression" in str(item.fspath):
             item.add_marker(pytest.mark.regression)
+

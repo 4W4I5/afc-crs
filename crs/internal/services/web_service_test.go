@@ -37,7 +37,7 @@ func TestNewWebService(t *testing.T) {
 					AnalysisURL:   "http://localhost:7082",
 				},
 				AI: config.AIConfig{
-					Model: "claude-sonnet-4",
+					Model: "claude-sonnet-4.6",
 				},
 			},
 		},
@@ -270,3 +270,4 @@ func TestWebServiceSetters(t *testing.T) {
 	assert.Equal(t, "http://new-analysis", webService.analysisServiceUrl)
 	assert.Equal(t, "42", webService.workerIndex)
 }
+

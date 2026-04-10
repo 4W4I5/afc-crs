@@ -37,7 +37,7 @@ class LLMClient:
             Tuple of (response_text, success_bool)
         """
         if model_name is None:
-            model_name = self.config.models[0] if self.config.models else "claude-sonnet-4"
+            model_name = self.config.models[0] if self.config.models else "claude-sonnet-4.6"
 
         with self.tracer.start_as_current_span("genai") as span:
             span.set_attribute("crs.action.category", "fuzzing")
@@ -136,3 +136,4 @@ class LLMClient:
     def reset_tried_models(self):
         """Reset the tried models set"""
         self.tried_models.clear()
+

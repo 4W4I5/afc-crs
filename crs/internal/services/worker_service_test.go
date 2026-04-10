@@ -37,7 +37,7 @@ func TestNewWorkerService(t *testing.T) {
 					AnalysisURL:   "http://localhost:7082",
 				},
 				AI: config.AIConfig{
-					Model: "claude-sonnet-4",
+					Model: "claude-sonnet-4.6",
 				},
 			},
 		},
@@ -363,3 +363,4 @@ func TestWorkerServiceSubmitWorkerTaskHighCPURejects(t *testing.T) {
 	})
 	assert.Error(t, err)
 }
+

@@ -62,8 +62,8 @@ func TestLoad_DefaultValues(t *testing.T) {
 	}
 
 	// Test AI defaults
-	if cfg.AI.Model != "claude-sonnet-4" {
-		t.Errorf("Expected default AI.Model='claude-sonnet-4', got '%s'", cfg.AI.Model)
+	if cfg.AI.Model != "claude-sonnet-4.6" {
+		t.Errorf("Expected default AI.Model='claude-sonnet-4.6', got '%s'", cfg.AI.Model)
 	}
 }
 
@@ -230,7 +230,7 @@ func TestValidate_LocalMode_ClaudeWithAPIKey(t *testing.T) {
 	cfg := &Config{
 		Mode: "local",
 		AI: AIConfig{
-			Model:           "claude-sonnet-4",
+			Model:           "claude-sonnet-4.6",
 			AnthropicAPIKey: "test-key",
 		},
 	}
@@ -244,7 +244,7 @@ func TestValidate_LocalMode_ClaudeWithoutAPIKey(t *testing.T) {
 	cfg := &Config{
 		Mode: "local",
 		AI: AIConfig{
-			Model:           "claude-sonnet-4",
+			Model:           "claude-sonnet-4.6",
 			AnthropicAPIKey: "",
 		},
 	}
@@ -611,3 +611,4 @@ func TestConfig_LoadWithFuzzerConfig(t *testing.T) {
 		t.Errorf("expected discovery mode 'config', got '%s'", cfg.Fuzzer.DiscoveryMode)
 	}
 }
+
