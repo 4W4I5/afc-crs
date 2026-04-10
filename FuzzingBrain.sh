@@ -13,6 +13,43 @@ print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+validate_env_file() {
+    local env_file="$1"
+    local invalid_lines
+
+    invalid_lines=$(grep -nEv '^[[:space:]]*$|^[[:space:]]*#|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$env_file" || true)
+    if [ -n "$invalid_lines" ]; then
+        print_error "Invalid line(s) found in $env_file"
+        echo "$invalid_lines"
+        print_error "Each non-comment line must be KEY=VALUE (example: OPENAI_BASE_URL=http://localhost:4141/v1)"
+        return 1
+    fi
+
+    return 0
+}
+
+run_crs() {
+    local run_script="$CRS_DIR/run_crs.sh"
+
+    if [ ! -f "$run_script" ]; then
+        print_error "run_crs.sh not found at $run_script"
+        exit 1
+    fi
+
+    if [ ! -x "$run_script" ]; then
+        chmod +x "$run_script" 2>/dev/null || true
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        "$run_script" "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$run_script" "$@"
+    else
+        print_error "sudo is not available and current user is not root"
+        exit 1
+    fi
+}
+
 # Check if argument looks like a git URL
 is_git_url() {
     [[ "$1" =~ ^git@ ]] || [[ "$1" =~ ^https?://.*\.git$ ]] || [[ "$1" =~ ^https?://github\.com/ ]] || [[ "$1" =~ ^https?://gitlab\.com/ ]]
@@ -298,6 +335,10 @@ check_environment() {
         return
     fi
 
+    if ! validate_env_file "$env_file"; then
+        exit 1
+    fi
+
     # Load .env file
     set -a
     source "$env_file"
@@ -444,7 +485,7 @@ if is_project_name "$TARGET"; then
     check_environment
 
     # Continue fuzzing with existing workspace (always in-place)
-    cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$WORKSPACE"
+    run_crs --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 2: Git URL - Create workspace from scratch
@@ -544,7 +585,7 @@ elif is_git_url "$TARGET"; then
             cd "$SCRIPT_DIR"
         else
             # Generate diff between base and delta (or HEAD if delta not specified)
-            local target_commit="${DELTA_COMMIT:-HEAD}"
+            target_commit="${DELTA_COMMIT:-HEAD}"
             git diff "$BASE_COMMIT..$target_commit" > "$WORKSPACE/diff/ref.diff"
 
             if [ -s "$WORKSPACE/diff/ref.diff" ]; then
@@ -563,7 +604,7 @@ elif is_git_url "$TARGET"; then
     check_environment
 
     # Run CRS with the new workspace (always in-place since we just created it)
-    cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$WORKSPACE"
+    run_crs --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 3: Local path - Use existing workspace
@@ -579,8 +620,8 @@ else
 
     # Pass through to original run_crs.sh
     if [ "$IN_PLACE" = true ]; then
-        cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$TARGET"
+        run_crs --in-place "$TARGET"
     else
-        cd "$CRS_DIR" && sudo ./run_crs.sh "$TARGET"
+        run_crs "$TARGET"
     fi
 fi

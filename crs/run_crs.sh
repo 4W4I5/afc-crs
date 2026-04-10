@@ -105,14 +105,16 @@ else
 fi
 
 # Set strategy base directory for local runs
-export STRATEGY_BASE_DIR="$(pwd)/strategy"
+export STRATEGY_BASE_DIR="$SCRIPT_DIR/strategy"
 
 # use the workspace directory
 echo "Command: go run ./cmd/local/main.go $WORKSPACE" | tee -a "$LOG_FILE"
 echo "Strategy directory: $STRATEGY_BASE_DIR" | tee -a "$LOG_FILE"
 echo "===========================================" | tee -a "$LOG_FILE"
 
+pushd "$SCRIPT_DIR" >/dev/null
 go run ./cmd/local/main.go "$WORKSPACE" 2>&1 | tee -a "$LOG_FILE"
+popd >/dev/null
 
 EXIT_CODE=${PIPESTATUS[0]}
 echo "===========================================" | tee -a "$LOG_FILE"
