@@ -98,6 +98,17 @@ GEMINI_API_KEY=your-key-here
 XAI_API_KEY=xai-your-key-here
 ```
 
+To route through a local proxy like `copilot-api`, set provider base URLs:
+
+```bash
+OPENAI_BASE_URL=http://copilot-api:4141/v1
+ANTHROPIC_BASE_URL=http://copilot-api:4141/v1
+OPENAI_API_KEY=dummy
+ANTHROPIC_API_KEY=dummy
+```
+
+For Docker Desktop (Windows/macOS), use `http://host.docker.internal:4141/v1` if CRS is running in a container and `copilot-api` is running on the host.
+
 ### 3. Run a Scan
 
 ```bash

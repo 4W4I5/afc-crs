@@ -1889,6 +1889,24 @@ var (
 	geminiKey    = os.Getenv("GEMINI_API_KEY")
 )
 
+func getEnvOrDefault(key, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func buildProviderURL(baseEnv, defaultBase, pathSuffix string) string {
+	base := strings.TrimRight(getEnvOrDefault(baseEnv, defaultBase), "/")
+	return base + pathSuffix
+}
+
+func buildGeminiGenerateContentURL(modelName, apiKey string) string {
+	base := strings.TrimRight(getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"), "/")
+	return fmt.Sprintf("%s/models/%s:generateContent?key=%s", base, modelName, apiKey)
+}
+
 // LLMModels we want to compare; you can adapt these to real endpoints
 var (
 	CLAUDE_MODEL        = "claude-sonnet-4.6"
@@ -1924,7 +1942,8 @@ func invokeModel(modelName, prompt string) (string, error) {
 			},
 		}
 		body, _ = json.Marshal(payload)
-		req, err = http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(body))
+		endpoint := buildProviderURL("OPENAI_BASE_URL", "https://api.openai.com/v1", "/chat/completions")
+		req, err = http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 
@@ -1941,7 +1960,8 @@ func invokeModel(modelName, prompt string) (string, error) {
 			},
 		}
 		body, _ = json.Marshal(payload)
-		req, err = http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(body))
+		endpoint := buildProviderURL("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1", "/messages")
+		req, err = http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
@@ -1951,7 +1971,7 @@ func invokeModel(modelName, prompt string) (string, error) {
 		if apiKey == "" {
 			return responseText, fmt.Errorf("Missing GEMINI_API_KEY")
 		}
-		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, apiKey)
+		url := buildGeminiGenerateContentURL(modelName, apiKey)
 		payload := map[string]interface{}{
 			"contents": []map[string]interface{}{
 				{
@@ -8738,4 +8758,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-

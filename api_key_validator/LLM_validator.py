@@ -29,12 +29,20 @@ class LLMValidator:
         
         self.advanced_mode = advanced_mode
         
+        # API base URLs
+        self.base_urls = {
+            'openai': os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/'),
+            'anthropic': os.getenv('ANTHROPIC_BASE_URL', 'https://api.anthropic.com/v1').rstrip('/'),
+            'gemini': os.getenv('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta').rstrip('/'),
+            'xai': os.getenv('XAI_BASE_URL', 'https://api.x.ai/v1').rstrip('/')
+        }
+
         # API endpoints
         self.endpoints = {
-            'openai': 'https://api.openai.com/v1/chat/completions',
-            'anthropic': 'https://api.anthropic.com/v1/messages',
-            'gemini': 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
-            'xai': 'https://api.x.ai/v1/chat/completions'
+            'openai': f"{self.base_urls['openai']}/chat/completions",
+            'anthropic': f"{self.base_urls['anthropic']}/messages",
+            'gemini': f"{self.base_urls['gemini']}/models/gemini-3-flash-preview:generateContent",
+            'xai': f"{self.base_urls['xai']}/chat/completions"
         }
         
         # API key environment variable names
@@ -102,7 +110,7 @@ class LLMValidator:
                     return False, f"❌ OpenAI API request failed: {response.status_code}\nError: {error_detail}"
             else:
                 # Basic validation - just check models endpoint
-                models_url = 'https://api.openai.com/v1/models'
+                models_url = f"{self.base_urls['openai']}/models"
                 response = requests.get(models_url, headers=headers, timeout=10)
                 
                 if response.status_code == 200:
@@ -167,7 +175,7 @@ class LLMValidator:
                     return False, f"❌ Anthropic API request failed: {response.status_code}\nError: {error_detail}"
             else:
                 # Basic validation - check models endpoint
-                models_url = 'https://api.anthropic.com/v1/models'
+                models_url = f"{self.base_urls['anthropic']}/models"
                 response = requests.get(models_url, headers=headers, timeout=10)
 
                 if response.status_code == 200:
@@ -191,7 +199,7 @@ class LLMValidator:
             if self.advanced_mode:
                 # Use advanced model to test with actual question
                 model = self.advanced_models['gemini']
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_keys['gemini']}"
+                url = f"{self.base_urls['gemini']}/models/{model}:generateContent?key={self.api_keys['gemini']}"
                 
                 data = {
                     "contents": [{
@@ -262,7 +270,7 @@ class LLMValidator:
                     return False, f"❌ Google Gemini API request failed: {response.status_code}\nError: {error_detail}"
             else:
                 # Basic validation - check models endpoint
-                models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_keys['gemini']}"
+                models_url = f"{self.base_urls['gemini']}/models?key={self.api_keys['gemini']}"
                 response = requests.get(models_url, timeout=10)
                 
                 if response.status_code == 200:
@@ -335,7 +343,7 @@ class LLMValidator:
                     return False, f"❌ xAI API request failed: {response.status_code}\nError: {error_detail}"
             else:
                 # Basic validation - check models endpoint
-                models_url = 'https://api.x.ai/v1/models'
+                models_url = f"{self.base_urls['xai']}/models"
                 response = requests.get(models_url, headers=headers, timeout=10)
                 
                 if response.status_code == 200:

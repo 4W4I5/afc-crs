@@ -362,7 +362,7 @@ def call_o1_pro_api(log_file, messages, model_name):
                 log_message(log_file, f"Retry attempt {attempt+1}/{max_retries}...")
             
             response = requests.post(
-                "https://api.openai.com/v1/responses",
+                f"{os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')}/responses",
                 headers=headers,
                 json=data,
                 timeout=900
@@ -2890,3 +2890,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

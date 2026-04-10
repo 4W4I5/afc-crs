@@ -1541,6 +1541,24 @@ var (
 	}
 )
 
+func getEnvOrDefault(key, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func buildProviderURL(baseEnv, defaultBase, pathSuffix string) string {
+	base := strings.TrimRight(getEnvOrDefault(baseEnv, defaultBase), "/")
+	return base + pathSuffix
+}
+
+func buildGeminiGenerateContentURL(modelName, apiKey string) string {
+	base := strings.TrimRight(getEnvOrDefault("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"), "/")
+	return fmt.Sprintf("%s/models/%s:generateContent?key=%s", base, modelName, apiKey)
+}
+
 func callGeminiAPI(prompt, modelName, apiKey, signature0 string) (bool, string) {
 	// Create a new Gemini API client
 	ctx := context.Background()
@@ -1596,7 +1614,8 @@ func callLLMAndCheckSignature(modelName, prompt string, signature0 string) (bool
 			},
 		}
 		body, _ = json.Marshal(payload)
-		req, err = http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(body))
+		endpoint := buildProviderURL("OPENAI_BASE_URL", "https://api.openai.com/v1", "/chat/completions")
+		req, err = http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 
@@ -1613,7 +1632,8 @@ func callLLMAndCheckSignature(modelName, prompt string, signature0 string) (bool
 			},
 		}
 		body, _ = json.Marshal(payload)
-		req, err = http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(body))
+		endpoint := buildProviderURL("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1", "/messages")
+		req, err = http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
@@ -1631,7 +1651,8 @@ func callLLMAndCheckSignature(modelName, prompt string, signature0 string) (bool
 			},
 		}
 		body, _ = json.Marshal(payload)
-		req, err = http.NewRequest("POST", "https://api.x.ai/v1/messages", bytes.NewBuffer(body))
+		endpoint := buildProviderURL("XAI_BASE_URL", "https://api.x.ai/v1", "/messages")
+		req, err = http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", apiKey)
 
@@ -1643,7 +1664,7 @@ func callLLMAndCheckSignature(modelName, prompt string, signature0 string) (bool
 		if true {
 			return callGeminiAPI(prompt, modelName, apiKey, signature0)
 		}
-		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, apiKey)
+		url := buildGeminiGenerateContentURL(modelName, apiKey)
 		payload := map[string]interface{}{
 			"contents": []map[string]interface{}{
 				{
@@ -1877,7 +1898,7 @@ Otherwise reply with exactly %q.
 	return false, fmt.Errorf("could not determine redundancy after %d attempts", attempts)
 }
 
-// compareCrashTraces uses Claude 3.7 to determine if two crash traces represent the same vulnerability
+// compareCrashTraces uses Claude to determine if two crash traces represent the same vulnerability
 func (h *Handler) compareCrashTraces0(trace1, trace2 string) (bool, error) {
 	// Get API key from environment
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -1926,7 +1947,8 @@ func (h *Handler) compareCrashTraces0(trace1, trace2 string) (bool, error) {
 	log.Printf("Request to Claude API:\n%s", string(reqJSONPretty))
 
 	// Send request to Claude API
-	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(reqJSON))
+	endpoint := buildProviderURL("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1", "/messages")
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return false, fmt.Errorf("error creating request: %v", err)
 	}
@@ -3632,4 +3654,3 @@ func (h *Handler) Ping(c *gin.Context) {
 
 	c.JSON(resp.StatusCode, response)
 }
-

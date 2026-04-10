@@ -51,10 +51,14 @@ type ServicesConfig struct {
 
 // AIConfig holds AI model configuration (for local mode)
 type AIConfig struct {
-	Model           string `envconfig:"AI_MODEL" default:"claude-sonnet-4.6"`
-	AnthropicAPIKey string `envconfig:"ANTHROPIC_API_KEY"`
-	GeminiAPIKey    string `envconfig:"GEMINI_API_KEY"`
-	OpenAIAPIKey    string `envconfig:"OPENAI_API_KEY"`
+	Model            string `envconfig:"AI_MODEL" default:"claude-sonnet-4.6"`
+	AnthropicAPIKey  string `envconfig:"ANTHROPIC_API_KEY"`
+	GeminiAPIKey     string `envconfig:"GEMINI_API_KEY"`
+	OpenAIAPIKey     string `envconfig:"OPENAI_API_KEY"`
+	AnthropicBaseURL string `envconfig:"ANTHROPIC_BASE_URL" default:"https://api.anthropic.com/v1"`
+	OpenAIBaseURL    string `envconfig:"OPENAI_BASE_URL" default:"https://api.openai.com/v1"`
+	GeminiBaseURL    string `envconfig:"GEMINI_BASE_URL" default:"https://generativelanguage.googleapis.com/v1beta"`
+	XAIBaseURL       string `envconfig:"XAI_BASE_URL" default:"https://api.x.ai/v1"`
 }
 
 // FuzzerConfig holds fuzzer build and selection configuration
@@ -113,10 +117,10 @@ type POVStrategyConfig struct {
 // PatchStrategyConfig holds Patch strategy patterns and selection
 type PatchStrategyConfig struct {
 	// Patch strategy patterns (patch* strategies)
-	DeltaPattern        string `envconfig:"STRATEGY_PATCH_DELTA_PATTERN" default:"patch*_delta.py"`
-	FullPattern         string `envconfig:"STRATEGY_PATCH_FULL_PATTERN" default:"patch*_full.py"`
-	SpecificDeltaName   string `envconfig:"STRATEGY_PATCH_SPECIFIC_DELTA" default:"patch_delta.py"`
-	SpecificFullName    string `envconfig:"STRATEGY_PATCH_SPECIFIC_FULL" default:"patch_full.py"`
+	DeltaPattern      string `envconfig:"STRATEGY_PATCH_DELTA_PATTERN" default:"patch*_delta.py"`
+	FullPattern       string `envconfig:"STRATEGY_PATCH_FULL_PATTERN" default:"patch*_full.py"`
+	SpecificDeltaName string `envconfig:"STRATEGY_PATCH_SPECIFIC_DELTA" default:"patch_delta.py"`
+	SpecificFullName  string `envconfig:"STRATEGY_PATCH_SPECIFIC_FULL" default:"patch_full.py"`
 
 	// XPatch strategy patterns (xpatch* strategies)
 	XPatchDeltaPattern string `envconfig:"STRATEGY_XPATCH_DELTA_PATTERN" default:"xpatch*_delta.py"`
@@ -238,8 +242,8 @@ func Load() (*Config, error) {
 
 	// Handle test mode overrides
 	if os.Getenv("LOCAL_TEST") != "" ||
-	   os.Getenv("ANALYSIS_SERVICE_TEST") != "" ||
-	   os.Getenv("SUBMISSION_SERVICE_TEST") != "" {
+		os.Getenv("ANALYSIS_SERVICE_TEST") != "" ||
+		os.Getenv("SUBMISSION_SERVICE_TEST") != "" {
 		cfg.Services.AnalysisURL = "http://localhost:7082"
 		cfg.Services.SubmissionURL = "http://localhost:7081"
 	}
@@ -409,4 +413,3 @@ func (f *FuzzerConfig) ShouldUseSanitizer(fuzzerPath string) bool {
 	sanitizerDir := fmt.Sprintf("-%s/", f.PreferredSanitizer)
 	return strings.Contains(fuzzerPath, sanitizerDir)
 }
-

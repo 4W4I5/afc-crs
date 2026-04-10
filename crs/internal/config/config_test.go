@@ -13,6 +13,7 @@ func clearEnv() {
 		"WORKER_NODES", "WORKER_PORT", "WORKER_INDEX", "POD_NAME", "WEB_SERVICE_URL",
 		"SUBMISSION_SERVICE", "ANALYSIS_SERVICE",
 		"AI_MODEL", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY",
+		"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_BASE_URL", "XAI_BASE_URL",
 		"LOCAL_TEST", "ANALYSIS_SERVICE_TEST", "SUBMISSION_SERVICE_TEST",
 	}
 	for _, v := range envVars {
@@ -611,4 +612,3 @@ func TestConfig_LoadWithFuzzerConfig(t *testing.T) {
 		t.Errorf("expected discovery mode 'config', got '%s'", cfg.Fuzzer.DiscoveryMode)
 	}
 }
-
