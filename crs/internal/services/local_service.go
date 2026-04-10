@@ -182,7 +182,7 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 		// Save task detail to task directory for future runs
 		jsonData, marshalErr := json.MarshalIndent(taskDetail, "", "  ")
 		if marshalErr == nil {
-			if writeErr := os.WriteFile(taskDetailPath, jsonData, 0644); writeErr == nil {
+			if writeErr := os.WriteFile(taskDetailPath, jsonData, 0o644); writeErr == nil {
 				log.Printf("Saved task detail to %s", taskDetailPath)
 			} else {
 				log.Printf("Warning: Failed to save task detail: %v", writeErr)
@@ -401,7 +401,7 @@ func (s *LocalCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectD
 	sanitizerProjectDir := fmt.Sprintf("%s-%s", projectDir, sanitizer)
 
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(sanitizerProjectDir, 0755); err != nil {
+	if err := os.MkdirAll(sanitizerProjectDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create sanitizer-specific project directory: %v", err)
 	}
 
@@ -433,7 +433,7 @@ func (s *LocalCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectD
 
 		// Also copy to the project subdirectory within the sanitizer directory
 		projectSubdir := filepath.Join(sanitizerProjectDir, taskDetail.ProjectName)
-		if err := os.MkdirAll(projectSubdir, 0755); err != nil {
+		if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
 			log.Printf("Warning: Failed to create project subdirectory in sanitizer directory: %v", err)
 		} else {
 			projectPatchPath := filepath.Join(projectSubdir, "build.patch")

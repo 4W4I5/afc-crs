@@ -23,7 +23,7 @@ import (
 
 const (
 	SafetyBufferMinutes = 10
-	UNHARNESSED        = "UNHARNESSED"
+	UNHARNESSED         = "UNHARNESSED"
 )
 
 // TaskExecutionParams contains all parameters needed for executing a fuzzing task on a worker
@@ -206,13 +206,13 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 
 		if os.Getenv("FUZZER_TEST") == "" {
 			fullScanConfig := FullScanStrategyConfig{
-				Model:                    params.Model,
-				POVMetadataDir:           params.POVMetadataDir,
-				SubmissionEndpoint:       params.SubmissionEndpoint,
-				WorkerIndex:              params.WorkerIndex,
-				AnalysisServiceUrl:       params.AnalysisServiceUrl,
-				StrategyConfig:           params.StrategyConfig,
-				Sanitizer:                sanitizer,
+				Model:              params.Model,
+				POVMetadataDir:     params.POVMetadataDir,
+				SubmissionEndpoint: params.SubmissionEndpoint,
+				WorkerIndex:        params.WorkerIndex,
+				AnalysisServiceUrl: params.AnalysisServiceUrl,
+				StrategyConfig:     params.StrategyConfig,
+				Sanitizer:          sanitizer,
 			}
 			povSuccess = runFullScanStrategy(fuzzer, params.TaskDir, projectDir, fuzzDir,
 				params.ProjectConfig.Language, params.TaskDetail, params.Task, fullScanConfig)
@@ -348,8 +348,8 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 
 // executePatchingPhase runs patching strategies after POV is found
 func executePatchingPhase(ctx context.Context, fuzzer string, params TaskExecutionParams,
-	projectDir, fuzzDir, sanitizer string, deadlineTime time.Time) bool {
-
+	projectDir, fuzzDir, sanitizer string, deadlineTime time.Time,
+) bool {
 	_, patchSpan := telemetry.StartSpan(ctx, "patching_phase")
 	patchSpan.SetAttributes(attribute.String("crs.action.category", "patch_generation"))
 	patchSpan.SetAttributes(attribute.String("crs.action.name", "runPatchingStrategies"))
@@ -383,8 +383,8 @@ func executePatchingPhase(ctx context.Context, fuzzer string, params TaskExecuti
 
 // executeXPatchPhase runs XPatch strategies when halftime is reached without POV
 func executeXPatchPhase(fuzzer string, params TaskExecutionParams, projectDir, sanitizer string,
-	deadlineTime time.Time) bool {
-
+	deadlineTime time.Time,
+) bool {
 	if fuzzer == UNHARNESSED {
 		log.Printf("Skipping XPatch for unharnessed fuzzer")
 		return false
@@ -431,7 +431,7 @@ func executeXPatchPhase(fuzzer string, params TaskExecutionParams, projectDir, s
 	// Create sentinel file to indicate XPatch completion
 	fuzzerName := filepath.Base(fuzzer)
 	sentinelFile := path.Join(params.TaskDir, "xpatch-"+fuzzerName)
-	if err := os.WriteFile(sentinelFile, []byte(fmt.Sprintf("success=%v\n", patchSuccess)), 0644); err != nil {
+	if err := os.WriteFile(sentinelFile, []byte(fmt.Sprintf("success=%v\n", patchSuccess)), 0o644); err != nil {
 		log.Printf("Failed to create sentinel file %s: %v", sentinelFile, err)
 	} else {
 		log.Printf("XPatch completed (success=%v), created sentinel: %s", patchSuccess, sentinelFile)
@@ -507,4 +507,3 @@ func printCompletionSummary(projectDir, taskDir string, povFound bool) {
 	log.Println("╚════════════════════════════════════════════════════════════════╝")
 	log.Println("")
 }
-

@@ -397,7 +397,7 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 	sanitizerProjectDir := fmt.Sprintf("%s-%s", projectDir, sanitizer)
 
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(sanitizerProjectDir, 0755); err != nil {
+	if err := os.MkdirAll(sanitizerProjectDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create sanitizer-specific project directory: %v", err)
 	}
 
@@ -429,7 +429,7 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 
 		// Also copy to the project subdirectory within the sanitizer directory
 		projectSubdir := filepath.Join(sanitizerProjectDir, taskDetail.ProjectName)
-		if err := os.MkdirAll(projectSubdir, 0755); err != nil {
+		if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
 			log.Printf("Warning: Failed to create project subdirectory in sanitizer directory: %v", err)
 		} else {
 			projectPatchPath := filepath.Join(projectSubdir, "build.patch")
@@ -545,7 +545,6 @@ func (s *WorkerCRSService) processSarif(taskID string, broadcast models.SARIFBro
 }
 
 func (s *WorkerCRSService) checkIfSarifValid(taskID string, broadcast models.SARIFBroadcastDetail) (bool, error) {
-
 	broadcastJSON, err := json.Marshal(broadcast)
 	if err != nil {
 		log.Printf("Error json.Marshal for broadcast SarifID %s: %v", broadcast.SarifID, err)
@@ -623,7 +622,6 @@ func (s *WorkerCRSService) checkIfSarifValid(taskID string, broadcast models.SAR
 }
 
 func (s *WorkerCRSService) checkIfSarifInValid(taskID string, ctxs []models.CodeContext, broadcast models.SARIFBroadcastDetail) (int, error) {
-
 	payload := struct {
 		Broadcast models.SARIFBroadcastDetail `json:"broadcast"`
 		Contexts  []models.CodeContext        `json:"contexts"`
@@ -689,7 +687,6 @@ func (s *WorkerCRSService) checkIfSarifInValid(taskID string, ctxs []models.Code
 }
 
 func (s *WorkerCRSService) submitSarifInvalid(taskID string, broadcast models.SARIFBroadcastDetail) error {
-
 	url := fmt.Sprintf("%s/v1/sarifx/invalid/%s/%s/", s.submissionEndpoint, taskID, broadcast.SarifID)
 
 	broadcastJSON, err := json.Marshal(broadcast)
@@ -741,7 +738,8 @@ func (s *WorkerCRSService) submitSarifInvalid(taskID string, broadcast models.SA
 }
 
 func (s *WorkerCRSService) runSarifPOVStrategies(myFuzzer, taskDir, sarifFilePath string, language string, taskDetail *models.TaskDetail, timeout int,
-	phase int) bool {
+	phase int,
+) bool {
 	// Find all strategy files under /app/strategy/
 	strategyDir := "/app/strategy"
 	strategyFilePattern := "sarif_pov*.py"
@@ -897,8 +895,8 @@ func (s *WorkerCRSService) runSarifPOVStrategies(myFuzzer, taskDir, sarifFilePat
 }
 
 func (s *WorkerCRSService) runXPatchSarifStrategies(myFuzzer, taskDir, sarifFilePath string, language string, taskDetail models.TaskDetail,
-	deadlineTime time.Time) bool {
-
+	deadlineTime time.Time,
+) bool {
 	log.Printf("runXPatchSarifStrategies: starting patch attempt with sarif "+
 		"(task type: %s)", taskDetail.Type)
 
