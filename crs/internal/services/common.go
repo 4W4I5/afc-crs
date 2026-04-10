@@ -91,7 +91,7 @@ func initializeWorkDir() string {
 func initializeCompetitionAPI() (endpoint, keyID, token string) {
 	endpoint = os.Getenv("COMPETITION_API_ENDPOINT")
 	if endpoint == "" {
-		endpoint = "http://localhost:7081"
+		endpoint = "http://localhost:4141"
 	}
 
 	keyID = os.Getenv("CRS_KEY_ID")

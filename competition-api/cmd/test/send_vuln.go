@@ -67,7 +67,7 @@ func main() {
     }
 
     // Send to CRS
-    req, err := http.NewRequest("POST", "http://localhost:8080/v1/sarif/", bytes.NewBuffer(jsonData))
+    req, err := http.NewRequest("POST", "http://localhost:4141/v1/sarif/", bytes.NewBuffer(jsonData))
     if err != nil {
         panic(err)
     }

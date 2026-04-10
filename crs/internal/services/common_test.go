@@ -62,7 +62,7 @@ func TestInitializeCompetitionAPIUsesDefaults(t *testing.T) {
 	t.Setenv("CRS_KEY_TOKEN", "")
 
 	endpoint, key, token := initializeCompetitionAPI()
-	assert.Equal(t, "http://localhost:7081", endpoint)
+	assert.Equal(t, "http://localhost:4141", endpoint)
 	assert.Empty(t, key)
 	assert.Empty(t, token)
 }

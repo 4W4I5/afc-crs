@@ -36,7 +36,7 @@ func setupRouter() *gin.Engine {
     // Create new handler instance
     h := handlers.NewHandler()
     if os.Getenv("LOCAL_TEST") != "" {
-        h.SetHostAPIBaseURL("http://localhost:1323")
+        h.SetHostAPIBaseURL("http://localhost:4141")
     }
 
     r.POST("/sarifx/", h.SubmitSARIFX)
@@ -107,7 +107,7 @@ func main() {
     router := setupRouter()
 
     // Get port from environment variable or use default
-    port := getEnvWithFallback("PORT", "7081")
+    port := getEnvWithFallback("PORT", "4141")
     
     // Start server
     serverAddr := ":" + port

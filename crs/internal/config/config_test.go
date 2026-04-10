@@ -134,8 +134,8 @@ func TestLoad_TestModeOverride(t *testing.T) {
 	if cfg.Services.AnalysisURL != "http://localhost:7082" {
 		t.Errorf("Expected test mode AnalysisURL='http://localhost:7082', got '%s'", cfg.Services.AnalysisURL)
 	}
-	if cfg.Services.SubmissionURL != "http://localhost:7081" {
-		t.Errorf("Expected test mode SubmissionURL='http://localhost:7081', got '%s'", cfg.Services.SubmissionURL)
+	if cfg.Services.SubmissionURL != "http://localhost:4141" {
+		t.Errorf("Expected test mode SubmissionURL='http://localhost:4141', got '%s'", cfg.Services.SubmissionURL)
 	}
 }
 

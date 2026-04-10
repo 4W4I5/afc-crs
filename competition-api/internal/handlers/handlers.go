@@ -80,9 +80,7 @@ func similar(a, b string) bool {
 
 func NewHandler() *Handler {
 	return &Handler{
-		hostAPIBaseURL: "https://api.tail7e9b4c.ts.net", // Default value
-		// FOR TESTING ONLY
-		// hostAPIBaseURL: "https://test-synthetic-dawn-api.tail7e9b4c.ts.net",
+		hostAPIBaseURL: "http://localhost:4141",
 	}
 }
 

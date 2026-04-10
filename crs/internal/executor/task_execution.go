@@ -55,7 +55,7 @@ func ExecuteFuzzingTask(params TaskExecutionParams) error {
 
 	// Handle LOCAL_TEST mode
 	if os.Getenv("LOCAL_TEST") != "" {
-		params.SubmissionEndpoint = "http://localhost:7081"
+		params.SubmissionEndpoint = "http://localhost:4141"
 		// In LOCAL_TEST mode, use all fuzzers from params.AllFuzzers
 		fuzzersToExecute = params.AllFuzzers
 	} else {

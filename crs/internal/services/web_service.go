@@ -59,7 +59,7 @@ func NewWebService(cfg *config.Config) CRSService {
 	// Get API configuration from config
 	apiEndpoint := os.Getenv("COMPETITION_API_ENDPOINT")
 	if apiEndpoint == "" {
-		apiEndpoint = "http://localhost:7081"
+		apiEndpoint = "http://localhost:4141"
 	}
 
 	// Define default work directory

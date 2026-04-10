@@ -2197,7 +2197,7 @@ def submit_pov_to_endpoint(log_file, project_dir, blob_path, fuzzer_output,sanit
                     return True
 
                 pov_id = response_data["pov_id"]
-                api_url = f"https://api.tail7e9b4c.ts.net/v1/task/{task_id}/pov/{pov_id}"
+                api_url = f"http://localhost:4141/v1/task/{task_id}/pov/{pov_id}"
 
                 max_wait_sec = 900          # 5 min
                 poll_interval = 30           # 5 s

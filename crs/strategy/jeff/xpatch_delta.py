@@ -866,7 +866,7 @@ def submit_patch_to_endpoint(log_file, pov_signature, patch_diff):
                     log_message(log_file, f"PATCH duplicated!")
                     # return False
 
-                api_url = f"https://api.tail7e9b4c.ts.net/v1/task/{task_id}/patch/{patch_id_x}"
+                api_url = f"http://localhost:4141/v1/task/{task_id}/patch/{patch_id_x}"
 
                 max_wait_sec = 900          # 5 min
                 poll_interval = 30           # 5 s

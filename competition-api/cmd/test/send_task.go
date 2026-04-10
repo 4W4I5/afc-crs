@@ -79,7 +79,7 @@ func main() {
     fmt.Printf("Sending JSON: %s\n", string(jsonData))
 
     // Send to CRS
-    req, err := http.NewRequest("POST", "http://localhost:8080/v1/task/", bytes.NewBuffer(jsonData))
+    req, err := http.NewRequest("POST", "http://localhost:4141/v1/task/", bytes.NewBuffer(jsonData))
     if err != nil {
         panic(err)
     }

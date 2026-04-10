@@ -241,7 +241,7 @@ func Load() (*Config, error) {
 	   os.Getenv("ANALYSIS_SERVICE_TEST") != "" ||
 	   os.Getenv("SUBMISSION_SERVICE_TEST") != "" {
 		cfg.Services.AnalysisURL = "http://localhost:7082"
-		cfg.Services.SubmissionURL = "http://localhost:7081"
+		cfg.Services.SubmissionURL = "http://localhost:4141"
 	}
 
 	// Auto-extract worker index from pod name if not set

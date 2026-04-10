@@ -5,7 +5,7 @@ Send http request to the server to render the task and save the result.
 import requests
 
 
-URL = "http://localhost:8080"
+URL = "http://localhost:4141"
 
 def send_current_project_tasks(project, tasks):
     """

@@ -169,7 +169,7 @@ func (h *Handler) SubmitLocalTask(taskPath string) {
         h.analysisService = "http://localhost:7082"
     }
     if os.Getenv("SUBMISSION_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
-        h.submissionService = "http://localhost:7081"
+        h.submissionService = "http://localhost:4141"
     }
 
     h.crs.SubmitLocalTask(taskPath)
@@ -215,7 +215,7 @@ func (h *Handler) SubmitTask(c *gin.Context) {
         h.analysisService = "http://localhost:7082"
     }
     if os.Getenv("SUBMISSION_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
-        h.submissionService = "http://localhost:7081"
+        h.submissionService = "http://localhost:4141"
     }
 
     if true {
