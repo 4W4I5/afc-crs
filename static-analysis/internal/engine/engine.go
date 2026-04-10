@@ -2391,7 +2391,6 @@ Original Script:
 	return modifiedScriptContent, nil
 	// 5. later, the bc files will be analyzed by wpa.
 	// eg.. wpa -ander -dump-callgraph libpng_read_fuzzer.ll
-
 }
 
 // copyFile copies a file from src to dst.
