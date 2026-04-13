@@ -1,0 +1,236 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "claude-opus-4.6",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Opus 4.6"
+    },
+    {
+      "id": "claude-sonnet-4.6",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Sonnet 4.6"
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "owned_by": "Google",
+      "display_name": "Gemini 3.1 Pro"
+    },
+    {
+      "id": "goldeneye-free-auto",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Goldeneye"
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.2-Codex"
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.3-Codex"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.4 mini"
+    },
+    {
+      "id": "gpt-5.4",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.4"
+    },
+    {
+      "id": "minimax-m2.5",
+      "owned_by": "Cerebras",
+      "display_name": "MiniMax M2.5 (Fast)"
+    },
+    {
+      "id": "accounts/msft/routers/mp3yn0h7",
+      "owned_by": "Fireworks",
+      "display_name": "MiniMax M2.5 (Copilot)"
+    },
+    {
+      "id": "accounts/msft/routers/yaqq2gxh",
+      "owned_by": "Fireworks",
+      "display_name": "MiniMax M2.5"
+    },
+    {
+      "id": "accounts/msft/routers/f185i3v4",
+      "owned_by": "Fireworks",
+      "display_name": "Search Agent A"
+    },
+    {
+      "id": "accounts/msft/routers/fmfeto88",
+      "owned_by": "Fireworks",
+      "display_name": "Search Agent B"
+    },
+    {
+      "id": "accounts/msft/routers/gdjv4v2v",
+      "owned_by": "Fireworks",
+      "display_name": "Search Agent C"
+    },
+    {
+      "id": "gpt-5-mini",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-5 mini"
+    },
+    {
+      "id": "gpt-4o-mini-2024-07-18",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o mini"
+    },
+    {
+      "id": "gpt-4o-2024-11-20",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "gpt-4o-2024-08-06",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "grok-code-fast-1",
+      "owned_by": "xAI",
+      "display_name": "Grok Code Fast 1"
+    },
+    {
+      "id": "gpt-5.1",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.1"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Embedding V3 small"
+    },
+    {
+      "id": "text-embedding-3-small-inference",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Embedding V3 small (Inference)"
+    },
+    {
+      "id": "claude-sonnet-4",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Sonnet 4"
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "claude-opus-4.5",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Opus 4.5"
+    },
+    {
+      "id": "claude-haiku-4.5",
+      "owned_by": "Anthropic",
+      "display_name": "Claude Haiku 4.5"
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "owned_by": "Google",
+      "display_name": "Gemini 3 Flash (Preview)"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "owned_by": "Google",
+      "display_name": "Gemini 2.5 Pro"
+    },
+    {
+      "id": "gpt-4.1-2025-04-14",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4.1"
+    },
+    {
+      "id": "oswe-vscode-prime",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Raptor mini (Preview)"
+    },
+    {
+      "id": "oswe-vscode-secondary",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Raptor mini (Preview)"
+    },
+    {
+      "id": "gpt-5.2",
+      "owned_by": "OpenAI",
+      "display_name": "GPT-5.2"
+    },
+    {
+      "id": "gpt-41-copilot",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4.1 Copilot"
+    },
+    {
+      "id": "gpt-3.5-turbo-0613",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 3.5 Turbo"
+    },
+    {
+      "id": "gpt-4",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 4"
+    },
+    {
+      "id": "gpt-4-0613",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 4"
+    },
+    {
+      "id": "gpt-4-0125-preview",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 4 Turbo"
+    },
+    {
+      "id": "gpt-4o-2024-05-13",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "gpt-4-o-preview",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "gpt-4.1",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4.1"
+    },
+    {
+      "id": "gpt-3.5-turbo",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 3.5 Turbo"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o mini"
+    },
+    {
+      "id": "gpt-4",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT 4"
+    },
+    {
+      "id": "gpt-4o",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "gpt-4-o-preview",
+      "owned_by": "Azure OpenAI",
+      "display_name": "GPT-4o"
+    },
+    {
+      "id": "text-embedding-ada-002",
+      "owned_by": "Azure OpenAI",
+      "display_name": "Embedding V2 Ada"
+    }
+  ],
+  "has_more": false
+}
