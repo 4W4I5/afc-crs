@@ -150,7 +150,9 @@ func runSingleFullScanStrategy(
 
 	// Set up environment variables
 	env := os.Environ()
-	env = append(env, "SUBMISSION_ENDPOINT="+submissionEndpoint)
+	if shouldUseSubmissionService(submissionEndpoint) {
+		env = append(env, "SUBMISSION_ENDPOINT="+submissionEndpoint)
+	}
 	env = append(env, "TASK_ID="+taskID)
 	env = append(env, "WORKER_INDEX="+workerIndex)
 	env = append(env, "PYTHONUNBUFFERED=1")

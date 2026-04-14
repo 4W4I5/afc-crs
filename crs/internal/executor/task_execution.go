@@ -56,6 +56,10 @@ func ExecuteFuzzingTask(params TaskExecutionParams) error {
 	// Handle LOCAL_TEST mode
 	if os.Getenv("LOCAL_TEST") != "" {
 		params.SubmissionEndpoint = "http://localhost:4141"
+		if isSubmissionServiceDisabled() {
+			params.SubmissionEndpoint = ""
+			log.Printf("Submission service disabled via CRS_DISABLE_SUBMISSION_SERVICE in LOCAL_TEST mode")
+		}
 		// In LOCAL_TEST mode, use all fuzzers from params.AllFuzzers
 		fuzzersToExecute = params.AllFuzzers
 	} else {
@@ -70,6 +74,11 @@ func ExecuteFuzzingTask(params TaskExecutionParams) error {
 	if len(fuzzersToExecute) == 0 {
 		log.Printf("No fuzzers specified for execution, skipping...")
 		return nil
+	}
+
+	if isSubmissionServiceDisabled() && params.SubmissionEndpoint != "" {
+		log.Printf("Submission service disabled via CRS_DISABLE_SUBMISSION_SERVICE, ignoring endpoint: %s", params.SubmissionEndpoint)
+		params.SubmissionEndpoint = ""
 	}
 
 	// Get absolute paths (used for all fuzzers)

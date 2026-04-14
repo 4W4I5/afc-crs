@@ -343,7 +343,6 @@ func runPatchingStrategies(
 				runCmd.Env = append(os.Environ(),
 					"VIRTUAL_ENV=/tmp/crs_venv",
 					"PATH=/tmp/crs_venv/bin:"+os.Getenv("PATH"),
-					fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint),
 					fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 					// Pass through API credentials if they exist
 					fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
@@ -355,6 +354,9 @@ func runPatchingStrategies(
 					fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 					"PYTHONUNBUFFERED=1",
 				)
+				if shouldUseSubmissionService(submissionEndpoint) {
+					runCmd.Env = append(runCmd.Env, fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint))
+				}
 
 				// If we generated an unharnessed fuzzer for this task, pass its source path.
 				if unharnessedFuzzerSrcPath != "" {
@@ -733,7 +735,6 @@ func runXPatchingStrategiesWithoutPOV(
 			runCmd.Env = append(os.Environ(),
 				"VIRTUAL_ENV=/tmp/crs_venv",
 				"PATH=/tmp/crs_venv/bin:"+os.Getenv("PATH"),
-				fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint),
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				// Pass through API credentials if they exist
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
@@ -745,6 +746,9 @@ func runXPatchingStrategiesWithoutPOV(
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
 			)
+			if shouldUseSubmissionService(submissionEndpoint) {
+				runCmd.Env = append(runCmd.Env, fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint))
+			}
 
 			// Log the command for debugging
 			log.Printf("[XPATCH] Executing: %s", runCmd.String())
@@ -962,7 +966,6 @@ func runXPatchSarifStrategies(
 			runCmd.Env = append(os.Environ(),
 				"VIRTUAL_ENV=/tmp/crs_venv",
 				"PATH=/tmp/crs_venv/bin:"+os.Getenv("PATH"),
-				fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint),
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
@@ -972,6 +975,9 @@ func runXPatchSarifStrategies(
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
 			)
+			if shouldUseSubmissionService(submissionEndpoint) {
+				runCmd.Env = append(runCmd.Env, fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint))
+			}
 
 			// --- Streaming logs setup ---
 			stdoutPipe, err := runCmd.StdoutPipe()
@@ -1043,6 +1049,9 @@ func runXPatchSarifStrategies(
 }
 
 func getPOVStatsFromSubmissionService(taskID, submissionEndpoint string) (int, int, error) {
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		return 0, 0, nil
+	}
 	url := fmt.Sprintf("%s/v1/task/%s/pov_stats/", submissionEndpoint, taskID)
 
 	// Create the HTTP request
@@ -1095,6 +1104,11 @@ func getPOVStatsFromSubmissionService(taskID, submissionEndpoint string) (int, i
 	defer resp.Body.Close()
 
 	// Check response status
+	if resp.StatusCode == http.StatusNotFound {
+		log.Printf("POV stats endpoint not supported by submission service (404): %s", url)
+		return 0, 0, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("Submission service returned non-200 status: %d, body: %s", resp.StatusCode, string(body))

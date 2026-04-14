@@ -67,6 +67,7 @@ EXCLUDED_DIRS: Set[str] = {
 }
 
 TOKEN_CHARS = r"A-Za-z0-9._/-"
+SELF_SCRIPT_PATH = Path(__file__).resolve()
 
 
 def parse_args() -> argparse.Namespace:
@@ -271,6 +272,9 @@ def iter_target_files(
             if file_path in seen:
                 continue
             seen.add(file_path)
+
+            if file_path.resolve() == SELF_SCRIPT_PATH:
+                continue
 
             if file_path.suffix.lower() not in include_extensions:
                 continue

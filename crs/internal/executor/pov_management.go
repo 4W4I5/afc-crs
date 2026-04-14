@@ -544,6 +544,9 @@ func GetValidPOVs(taskID string, submissionEndpoint string) ([]models.POVSubmiss
 
 // GetPOVStatsFromSubmissionService retrieves POV statistics from the submission service
 func GetPOVStatsFromSubmissionService(taskID string, submissionEndpoint string) (int, int, error) {
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		return 0, 0, nil
+	}
 
 	url := fmt.Sprintf("%s/v1/task/%s/pov_stats/", submissionEndpoint, taskID)
 	// Create the HTTP request
@@ -599,15 +602,19 @@ if err != nil {
 defer resp.Body.Close()
 
 		// Check response
+		if resp.StatusCode == http.StatusNotFound {
+			return 0, 0, nil
+		}
+
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			log.Printf("Submission service returned non-200 status: %d, body: %s", resp.StatusCode, string(body))
-			return 0,0, fmt.Errorf("Submission service returned non-200 status: %d, body: %s", resp.StatusCode, string(body))
+			return 0, 0, fmt.Errorf("Submission service returned non-200 status: %d, body: %s", resp.StatusCode, string(body))
 		} else {
 
 			var response models.POVStatsResponse
 			if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-				return 0,0, err
+				return 0, 0, err
 			}
 
 			return response.Count, response.PatchCount, nil

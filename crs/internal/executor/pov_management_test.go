@@ -145,6 +145,19 @@ func TestGetPOVStatsFromSubmissionService(t *testing.T) {
 	assert.Equal(t, 1, patchCount)
 }
 
+func TestGetPOVStatsFromSubmissionService404(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not implemented"}`))
+	}))
+	defer server.Close()
+
+	count, patchCount, err := GetPOVStatsFromSubmissionService("task", server.URL)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, 0, patchCount)
+}
+
 func TestFindProjectDir(t *testing.T) {
 	taskID := uuid.New().String()
 	workDir := t.TempDir()

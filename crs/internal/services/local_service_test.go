@@ -28,7 +28,7 @@ func TestNewLocalService(t *testing.T) {
 					AnalysisURL:   "http://localhost:7082",
 				},
 				AI: config.AIConfig{
-					Model:           "claude-sonnet-4",
+					Model:           "claude-sonnet-4.6",
 					AnthropicAPIKey: "test-api-key",
 				},
 			},
@@ -64,7 +64,7 @@ func TestNewLocalService(t *testing.T) {
 					AnalysisURL:   "http://analysis",
 				},
 				AI: config.AIConfig{
-					Model:        "gemini-2.5-pro",
+					Model:        "gemini-3.1-pro-preview",
 					GeminiAPIKey: "gemini-test-key",
 				},
 			},
@@ -104,7 +104,7 @@ func TestLocalService_GetStatus(t *testing.T) {
 			AnalysisURL:   "http://localhost:7082",
 		},
 		AI: config.AIConfig{
-			Model:           "claude-sonnet-4",
+			Model:           "claude-sonnet-4.6",
 			AnthropicAPIKey: "test-key",
 		},
 	}

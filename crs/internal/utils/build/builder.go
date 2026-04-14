@@ -3,12 +3,14 @@ package build
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"crs/internal/utils/helpers"
 )
@@ -57,7 +59,8 @@ func BuildAFCFuzzers(taskDir string, sanitizer, projectName, projectDir, sanitiz
 
 	// -------------------------------------------------------
 
-	helperCmd := exec.Command("python3",
+	buildArgs := []string{
+		"-u",
 		filepath.Join(taskDir, "fuzz-tooling/infra/helper.py"),
 		"build_fuzzers",
 		"--clean",
@@ -65,34 +68,63 @@ func BuildAFCFuzzers(taskDir string, sanitizer, projectName, projectDir, sanitiz
 		"--engine", "libfuzzer",
 		projectName,
 		projectDir,
-	)
-
-	var cmdOutput bytes.Buffer
-	helperCmd.Stdout = &cmdOutput
-	helperCmd.Stderr = &cmdOutput
-
-	log.Printf("[BuildAFCFuzzers] Building fuzzers for %s %s sanitizer\nCommand: %v", projectName,sanitizer, helperCmd.Args)
-
-	if err := helperCmd.Run(); err != nil {
-		output := cmdOutput.String()
-		lines := strings.Split(output, "\n")
-
-		// Truncate output if it's very long
-		if len(lines) > 30 {
-			firstLines := lines[:10]
-			lastLines := lines[len(lines)-20:]
-
-			truncatedOutput := strings.Join(firstLines, "\n") +
-				"\n\n[...TRUNCATED " + fmt.Sprintf("%d", len(lines)-30) + " LINES...]\n\n" +
-				strings.Join(lastLines, "\n")
-
-			output = truncatedOutput
-		}
-
-		return output, err
 	}
 
-	return cmdOutput.String(), nil
+	const maxBuildAttempts = 3
+	var lastOutput string
+	var lastErr error
+
+	for attempt := 1; attempt <= maxBuildAttempts; attempt++ {
+		helperCmd := exec.Command("python3", buildArgs...)
+
+		var cmdOutput bytes.Buffer
+		helperCmd.Stdout = io.MultiWriter(os.Stdout, &cmdOutput)
+		helperCmd.Stderr = io.MultiWriter(os.Stderr, &cmdOutput)
+
+		log.Printf("[BuildAFCFuzzers] Attempt %d/%d for %s %s sanitizer\nCommand: %v", attempt, maxBuildAttempts, projectName, sanitizer, helperCmd.Args)
+
+		if err := helperCmd.Run(); err != nil {
+			output := cmdOutput.String()
+			lastOutput = output
+			lastErr = err
+
+			if attempt < maxBuildAttempts && isTransientBuildFailure(output) {
+				backoff := time.Duration(attempt*20) * time.Second
+				log.Printf("[BuildAFCFuzzers] Transient build failure detected (attempt %d/%d). Retrying in %s...", attempt, maxBuildAttempts, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+
+			return truncateCommandOutput(output), err
+		}
+
+		return cmdOutput.String(), nil
+	}
+
+	return truncateCommandOutput(lastOutput), lastErr
+}
+
+func isTransientBuildFailure(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "resource_exhausted") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "error: 429") ||
+		strings.Contains(lower, "too many requests")
+}
+
+func truncateCommandOutput(output string) string {
+	lines := strings.Split(output, "\n")
+
+	if len(lines) <= 30 {
+		return output
+	}
+
+	firstLines := lines[:10]
+	lastLines := lines[len(lines)-20:]
+
+	return strings.Join(firstLines, "\n") +
+		"\n\n[...TRUNCATED " + fmt.Sprintf("%d", len(lines)-30) + " LINES...]\n\n" +
+		strings.Join(lastLines, "\n")
 }
 
 // BuildAFCFuzzers0 is an older version of BuildAFCFuzzers that copies the output
@@ -102,6 +134,7 @@ func BuildAFCFuzzers0(taskDir string, sanitizer, projectName, projectDir, saniti
 	// python3 infra/helper.py build_fuzzers --clean --sanitizer sanitizer --engine "libfuzzer" taskDetail.ProjectName sanitizerProjectDir
 
 	helperCmd := exec.Command("python3",
+		"-u",
 		filepath.Join(taskDir, "fuzz-tooling/infra/helper.py"),
 		"build_fuzzers",
 		"--clean",
@@ -112,8 +145,8 @@ func BuildAFCFuzzers0(taskDir string, sanitizer, projectName, projectDir, saniti
 	)
 
 	var cmdOutput bytes.Buffer
-	helperCmd.Stdout = &cmdOutput
-	helperCmd.Stderr = &cmdOutput
+	helperCmd.Stdout = io.MultiWriter(os.Stdout, &cmdOutput)
+	helperCmd.Stderr = io.MultiWriter(os.Stderr, &cmdOutput)
 
 	log.Printf("[BuildAFCFuzzers] Building fuzzers for %s %s sanitizer\nCommand: %v", projectName,sanitizer, helperCmd.Args)
 
@@ -152,6 +185,7 @@ func BuildAFCFuzzers0(taskDir string, sanitizer, projectName, projectDir, saniti
 func PullAFCDockerImage(taskDir string, projectName string) (string, error) {
 	// Build the command to run helper.py
 	helperCmd := exec.Command("python3",
+		"-u",
 		filepath.Join(taskDir, "fuzz-tooling/infra/helper.py"),
 		"build_image",
 		"--pull",
@@ -159,8 +193,8 @@ func PullAFCDockerImage(taskDir string, projectName string) (string, error) {
 	)
 
 	var cmdOutput bytes.Buffer
-	helperCmd.Stdout = &cmdOutput
-	helperCmd.Stderr = &cmdOutput
+	helperCmd.Stdout = io.MultiWriter(os.Stdout, &cmdOutput)
+	helperCmd.Stderr = io.MultiWriter(os.Stderr, &cmdOutput)
 
 	log.Printf("Building and pulling Docker images for %s\nCommand: %v", projectName, helperCmd.Args)
 

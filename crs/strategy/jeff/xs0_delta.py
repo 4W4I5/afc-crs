@@ -21,6 +21,7 @@ import tempfile
 import shutil
 import glob
 import tarfile
+import traceback
 from litellm import completion
 from dotenv import load_dotenv
 from typing import Optional, Dict, List, Any, Union, Tuple
@@ -30,10 +31,38 @@ import pprint
 
 load_dotenv()
 
-import openlit
 from opentelemetry import trace
-# Initialize openlit
-openlit.init(application_name="afc-crs-all-you-need-is-a-fuzzing-brain")
+
+try:
+    from colorama import Fore, Style, init as colorama_init
+    colorama_init(autoreset=True)
+    _HAS_COLORAMA = True
+except Exception:
+    _HAS_COLORAMA = False
+
+    class _NoColor:
+        RED = ""
+        YELLOW = ""
+        GREEN = ""
+        CYAN = ""
+        RESET_ALL = ""
+
+    Fore = _NoColor()
+    Style = _NoColor()
+
+try:
+    import openlit
+except Exception as openlit_import_error:
+    openlit = None
+    print(f"[WARN] openlit disabled: {openlit_import_error}", file=sys.stderr)
+
+# Initialize openlit when available; observability must not block strategy execution.
+if openlit is not None:
+    try:
+        openlit.init(application_name="afc-crs-all-you-need-is-a-fuzzing-brain")
+    except Exception as openlit_init_error:
+        print(f"[WARN] openlit init failed: {openlit_init_error}", file=sys.stderr)
+
 # Acquire a tracer
 tracer = trace.get_tracer(__name__)
 # for testing only on Nginx
@@ -60,52 +89,253 @@ PATCHING_TIMEOUT_MINUTES = 30
 OPENAI_MODEL = "gpt-4o-2024-11-20"
 OPENAI_MODEL_4O_MINI="gpt-4o-mini"
 OPENAI_MODEL_O1 = "gpt-5-mini"
-OPENAI_MODEL_O1_PRO = "gpt-5.1"
-OPENAI_MODEL_O3 = "gpt-5.2"
+OPENAI_MODEL_O1_PRO = "gpt-5.4"
+OPENAI_MODEL_O3 = "gpt-5.4"
 OPENAI_MODEL_O3_MINI = "gpt-5.4-mini"
 OPENAI_MODEL_O4_MINI = "gpt-5.4-mini"
 OPENAI_MODEL_41 = "gpt-4.1"
-OPENAI_MODEL_45 = "gpt-5.1"
+OPENAI_MODEL_45 = "gpt-5.4"
 # OPENAI_MODEL = "gpt-4o-2024-11-20"
 # CLAUDE_MODEL = "gpt-4o-mini"
-CLAUDE_MODEL = "claude-sonnet-4"
-CLAUDE_MODEL_35 = "claude-sonnet-4"
-GEMINI_MODEL_PRO_25_0325 = "gemini-2.5-pro"
-GEMINI_MODEL_PRO_25_0506 = "gemini-2.5-pro"
-GEMINI_MODEL_PRO_25 = "gemini-2.5-pro"
+CLAUDE_MODEL = "claude-sonnet-4.6"
+CLAUDE_MODEL_35 = "claude-sonnet-4.6"
+GEMINI_MODEL_PRO_25_0325 = "gemini-3.1-pro-preview"
+GEMINI_MODEL_PRO_25_0506 = "gemini-3.1-pro-preview"
+GEMINI_MODEL_PRO_25 = "gemini-3.1-pro-preview"
 GEMINI_MODEL = "gemini-3-flash-preview"
-GEMINI_MODEL_PRO = "gemini-2.5-pro"
+GEMINI_MODEL_PRO = "gemini-3.1-pro-preview"
 GEMINI_MODEL_FLASH = "gemini-3-flash-preview"
 GEMINI_MODEL_FLASH_20 = "gemini-3-flash-preview"
 GEMINI_MODEL_FLASH_LITE = "gemini-3-flash-preview"
 GROK_MODEL = "grok-code-fast-1"
-CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.5"
-CLAUDE_MODEL_OPUS_4 = "claude-opus-4.5"
+CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.6"
+CLAUDE_MODEL_OPUS_4 = "claude-opus-4.6"
 MODELS = [CLAUDE_MODEL, OPENAI_MODEL, CLAUDE_MODEL_OPUS_4, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25]
 CLAUDE_MODEL = CLAUDE_MODEL_SONNET_45
 OPENAI_MODEL = CLAUDE_MODEL_SONNET_45
 MODELS = [CLAUDE_MODEL_SONNET_45, CLAUDE_MODEL_OPUS_4]
 
-def get_fallback_model(current_model, tried_models):
-    """Get a fallback model that hasn't been tried yet"""
-    # Define model fallback chains
-    fallback_chains = {
-        GEMINI_MODEL_PRO_25: [GEMINI_MODEL_FLASH, GEMINI_MODEL_FLASH_20, CLAUDE_MODEL, CLAUDE_MODEL_35, OPENAI_MODEL_41, OPENAI_MODEL_O3],   
-        OPENAI_MODEL_41: [OPENAI_MODEL_O4_MINI, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25],   
-        OPENAI_MODEL: [GEMINI_MODEL_PRO_25, GEMINI_MODEL_FLASH, GEMINI_MODEL_FLASH_LITE],             
-        CLAUDE_MODEL: [CLAUDE_MODEL_SONNET_45,OPENAI_MODEL, CLAUDE_MODEL_35, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25],        
-        # Default fallbacks
-        "default": [CLAUDE_MODEL, OPENAI_MODEL, OPENAI_MODEL_41,OPENAI_MODEL_O3,GEMINI_MODEL_PRO_25]
+COPILOT_API_BASE_URL = os.environ.get("COPILOT_API_BASE_URL", "").strip()
+if not COPILOT_API_BASE_URL:
+    COPILOT_API_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").strip()
+if not COPILOT_API_BASE_URL:
+    COPILOT_API_BASE_URL = os.environ.get("OPENAI_API_BASE", "").strip()
+
+
+def _normalize_api_base(url: str) -> str:
+    if not url:
+        return ""
+    base = url.rstrip("/")
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+PROXY_API_BASE = _normalize_api_base(COPILOT_API_BASE_URL)
+_CACHED_PROXY_MODELS = None
+
+
+class CopilotModelCatalog:
+    """Tiered model catalog for routing/fallback decisions on Copilot proxy."""
+
+    FRONTIER = [
+        CLAUDE_MODEL_OPUS_4,
+        CLAUDE_MODEL_SONNET_45,
+        "gpt-5.4",
+        "gpt-5.1",
+        OPENAI_MODEL_41,
+        "gpt-4o-2024-11-20",
+        "gpt-4o-2024-08-06",
+        GEMINI_MODEL_PRO_25,
+    ]
+
+    BALANCED = [
+        OPENAI_MODEL_O1,
+        OPENAI_MODEL_41,
+        "gpt-4o-2024-11-20",
+        "gpt-4o-2024-08-06",
+    ]
+
+    SMALL_TASKS = [
+        "gpt-4o-mini-2024-07-18",
+        OPENAI_MODEL_4O_MINI,
+        OPENAI_MODEL_O4_MINI,
+        GEMINI_MODEL_FLASH,
+        GEMINI_MODEL_FLASH_20,
+        GEMINI_MODEL_FLASH_LITE,
+    ]
+
+    ODD_JOBS = [
+        GROK_MODEL,
+        "accounts/msft/routers/f185i3v4",
+        "accounts/msft/routers/fmfeto88",
+        "accounts/msft/routers/gdjv4v2v",
+        "accounts/msft/routers/mp3yn0h7",
+        "accounts/msft/routers/yaqq2gxh",
+        "goldeneye-free-auto",
+        "minimax-m2.5",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+    ]
+
+    @classmethod
+    def all_models(cls) -> List[str]:
+        return list(dict.fromkeys(cls.FRONTIER + cls.BALANCED + cls.SMALL_TASKS + cls.ODD_JOBS))
+
+    @classmethod
+    def ordered_candidates(cls, prompt_chars: int) -> List[str]:
+        # Long prompts should avoid smaller models that may fail on context length/quality.
+        if prompt_chars >= 12000:
+            tiers = cls.FRONTIER + cls.BALANCED
+        elif prompt_chars >= 6000:
+            tiers = cls.FRONTIER + cls.BALANCED + cls.SMALL_TASKS
+        else:
+            tiers = cls.FRONTIER + cls.BALANCED + cls.SMALL_TASKS + cls.ODD_JOBS
+        return list(dict.fromkeys(tiers))
+
+
+def _is_chat_completions_candidate(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    # Observed as unsupported for /chat/completions on this proxy.
+    if "codex" in name:
+        return False
+    if name in {"goldeneye-free-auto", "minimax-m2.5"}:
+        return False
+    return True
+
+
+def _estimate_prompt_chars(messages: Optional[List[Dict[str, Any]]]) -> int:
+    if not messages:
+        return 0
+
+    total = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        else:
+            try:
+                total += len(json.dumps(content, ensure_ascii=True))
+            except Exception:
+                total += len(str(content))
+    return total
+
+
+def _fetch_proxy_models(log_file):
+    global _CACHED_PROXY_MODELS
+    if _CACHED_PROXY_MODELS is not None:
+        return _CACHED_PROXY_MODELS
+
+    if not PROXY_API_BASE:
+        _CACHED_PROXY_MODELS = []
+        return _CACHED_PROXY_MODELS
+
+    endpoint_candidates = [
+        f"{PROXY_API_BASE}/models",
+        f"{PROXY_API_BASE[:-3]}/models" if PROXY_API_BASE.endswith("/v1") else "",
+    ]
+
+    for endpoint in endpoint_candidates:
+        if not endpoint:
+            continue
+        try:
+            resp = requests.get(endpoint, timeout=20)
+            if resp.status_code != 200:
+                continue
+            payload = resp.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, list):
+                continue
+
+            model_ids = []
+            for item in data:
+                if isinstance(item, dict) and item.get("id"):
+                    model_ids.append(item["id"])
+
+            if model_ids:
+                _CACHED_PROXY_MODELS = model_ids
+                log_message(log_file, f"Discovered {len(model_ids)} models from proxy endpoint: {endpoint}")
+                return _CACHED_PROXY_MODELS
+        except Exception:
+            continue
+
+    _CACHED_PROXY_MODELS = []
+    log_message(log_file, "Could not discover models from proxy endpoint, continuing with requested model names")
+    return _CACHED_PROXY_MODELS
+
+
+def _resolve_proxy_model_name(log_file, requested_model: str) -> str:
+    available = _fetch_proxy_models(log_file)
+    if not available:
+        return requested_model
+
+    if requested_model in available:
+        return requested_model
+
+    lower_requested = requested_model.lower()
+    alias_candidates = []
+    if lower_requested.startswith("claude"):
+        alias_candidates = ["gpt-4.1", "gpt-4o", "gpt-4o-mini"]
+    elif lower_requested.startswith("gemini"):
+        alias_candidates = ["gpt-4.1", "gpt-4o", "gpt-4o-mini"]
+    elif lower_requested.startswith("gpt-5"):
+        alias_candidates = ["gpt-4.1", "gpt-4o", "gpt-4o-mini"]
+
+    for candidate in alias_candidates:
+        if candidate in available:
+            log_message(log_file, f"Model '{requested_model}' not listed by proxy, remapping to '{candidate}'")
+            return candidate
+
+    fallback = available[0]
+    log_message(log_file, f"Model '{requested_model}' not listed by proxy, falling back to '{fallback}'")
+    return fallback
+
+
+def _build_litellm_request(log_file, requested_model: str):
+    if not PROXY_API_BASE:
+        return requested_model, {}
+
+    resolved_model = _resolve_proxy_model_name(log_file, requested_model)
+    model_name = f"openai/{resolved_model}"
+    kwargs = {
+        "api_base": PROXY_API_BASE,
+        "api_key": os.environ.get("OPENAI_API_KEY") or "dummy",
     }
-    # Get the fallback chain for the current model
-    fallback_options = fallback_chains.get(current_model, fallback_chains["default"])
-    
-    # Find the first model in the fallback chain that hasn't been tried yet
-    for model in fallback_options:
-        if model not in tried_models:
-            return model
-    
-    # If all models in the chain have been tried, return None
+    return model_name, kwargs
+
+def get_fallback_model(current_model, tried_models, messages=None, available_models=None):
+    """Get a fallback model that hasn't been tried, with prompt-size-aware tiering."""
+    prompt_chars = _estimate_prompt_chars(messages)
+
+    candidates = CopilotModelCatalog.ordered_candidates(prompt_chars)
+    # Keep strong local alternatives near the front for the current model family.
+    family_priority = {
+        CLAUDE_MODEL: [CLAUDE_MODEL_OPUS_4, OPENAI_MODEL_41, "gpt-4o-2024-11-20", "gpt-4o-2024-08-06"],
+        CLAUDE_MODEL_OPUS_4: [CLAUDE_MODEL_SONNET_45, OPENAI_MODEL_41, "gpt-4o-2024-11-20"],
+        GEMINI_MODEL_PRO_25: [OPENAI_MODEL_41, "gpt-4o-2024-11-20", CLAUDE_MODEL_SONNET_45],
+        OPENAI_MODEL_41: ["gpt-4o-2024-11-20", "gpt-4o-2024-08-06", CLAUDE_MODEL_SONNET_45],
+    }
+    preferred = family_priority.get(current_model, [])
+    ordered = list(dict.fromkeys(preferred + candidates))
+
+    if available_models:
+        available_set = set(available_models)
+        ordered = [m for m in ordered if m in available_set]
+        # Add any discovered models not in the static catalog (kept after tiered options).
+        discovered_extra = [m for m in available_models if m not in ordered]
+        ordered.extend(discovered_extra)
+
+    for model in ordered:
+        if model == current_model:
+            continue
+        if model in tried_models:
+            continue
+        if not _is_chat_completions_candidate(model):
+            continue
+        if prompt_chars >= 12000 and model in CopilotModelCatalog.SMALL_TASKS:
+            continue
+        return model
+
     return None
 
 
@@ -153,7 +383,65 @@ def log_message(log_file, message):
         f.write(log_entry)
     
     # Print to stdout
-    print(message)
+    print(_colorize_for_console(message))
+
+
+def _truncate_text(value: str, max_chars: int = 4000) -> str:
+    if not isinstance(value, str):
+        value = str(value)
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars] + "... [truncated]"
+
+
+def _colorize_for_console(message: str) -> str:
+    if not _HAS_COLORAMA:
+        return message
+
+    lowered = message.lower()
+    if any(token in lowered for token in ["error", "failed", "exception", "quota_exceeded"]):
+        return f"{Fore.RED}{message}{Style.RESET_ALL}"
+    if "warn" in lowered:
+        return f"{Fore.YELLOW}{message}{Style.RESET_ALL}"
+    if any(token in lowered for token in ["retry", "fallback"]):
+        return f"{Fore.CYAN}{message}{Style.RESET_ALL}"
+    if "success" in lowered:
+        return f"{Fore.GREEN}{message}{Style.RESET_ALL}"
+    return message
+
+
+def _format_exception_for_log(exc: Exception) -> str:
+    """Extract structured details from model exceptions for easier debugging."""
+    details = [f"exception_type={type(exc).__name__}", f"message={str(exc)}"]
+
+    for attr in ("status_code", "code", "type", "llm_provider", "model"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            details.append(f"{attr}={value}")
+
+    body = getattr(exc, "body", None)
+    if body is not None:
+        try:
+            details.append("body=" + _truncate_text(json.dumps(body, ensure_ascii=True)))
+        except Exception:
+            details.append("body=" + _truncate_text(str(body)))
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status is not None:
+            details.append(f"response_status={status}")
+
+        text = getattr(response, "text", None)
+        if text:
+            details.append("response_text=" + _truncate_text(text))
+        else:
+            try:
+                details.append("response_json=" + _truncate_text(json.dumps(response.json(), ensure_ascii=True)))
+            except Exception:
+                pass
+
+    return " | ".join(details)
 
 def log_cost(log_file, model_name, cost):
     """Log the cost of an LLM call"""
@@ -185,7 +473,7 @@ def truncate_output(output, max_lines=200):
     
     return '\n'.join(first_part) + '\n\n[...truncated...]\n\n' + '\n'.join(last_part)
 
-def call_gemini_api(log_file, messages, model_name="gemini-2.5-pro") -> (str, bool):
+def call_gemini_api(log_file, messages, model_name="gemini-3.1-pro-preview") -> (str, bool):
     """Call Gemini API with message history using the chat interface."""
 
     import google.generativeai as genai
@@ -233,6 +521,7 @@ def call_gemini_api(log_file, messages, model_name="gemini-2.5-pro") -> (str, bo
 
     except Exception as e:
         log_message(log_file, f"Exception calling Gemini API: {str(e)}")
+        log_message(log_file, f"Gemini error detail: {_format_exception_for_log(e)}")
         return f"Exception: {str(e)}", False
 
 
@@ -250,17 +539,20 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
     current_model = model_name
     log_prefix = "APIError"     
     tried_models_in_this_call = {current_model}
+    available_proxy_models = _fetch_proxy_models(log_file)
 
     for attempt in range(max_retries):
         try:
             if attempt > 0:
                 log_message(log_file, f"Retry attempt {attempt+1}/{max_retries} using model {current_model}...")
             
+            litellm_model, litellm_kwargs = _build_litellm_request(log_file, current_model)
             response = completion(
-                model=current_model,
+                model=litellm_model,
                 messages=messages,
                 temperature=1.0,
-                timeout=900
+                timeout=900,
+                **litellm_kwargs,
             )
             
             end_time = time.time()
@@ -270,6 +562,8 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
         except Exception as e:
             error_str = str(e)
             log_message(log_file, f"Attempt {attempt+1}/{max_retries} failed with model {current_model}: {error_str}")
+            log_message(log_file, f"Model error detail ({current_model}): {_format_exception_for_log(e)}")
+            log_message(log_file, f"Model error traceback ({current_model}): {traceback.format_exc()}")
             
             # Log the messages for debugging
             try:
@@ -292,15 +586,40 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
 
             # Determine error type and appropriate action
             # likely OpenAI all API credits are exhausted
+            lower_error = error_str.lower()
             is_auth_error = "AuthenticationError" in error_str or "API_KEY_INVALID" in error_str
             is_overloaded = "Overloaded" in error_str
-            is_rate_limited = "rate limit" in error_str.lower() or "too many requests" in error_str.lower()
+            is_rate_limited = "rate limit" in lower_error or "too many requests" in lower_error
             is_server_error = "server_error" in error_str or "server had an error" in error_str or "500" in error_str or "API usage limits" in error_str
+            is_quota_error = "quota_exceeded" in lower_error or "no quota" in lower_error
+
+            trigger_reasons = []
+            if is_quota_error:
+                trigger_reasons.append("quota_exceeded")
+            if is_rate_limited:
+                trigger_reasons.append("rate_limited")
+            if is_overloaded:
+                trigger_reasons.append("overloaded")
+            if is_server_error:
+                trigger_reasons.append("server_error")
+            if is_auth_error:
+                trigger_reasons.append("auth_error")
+
+            reason_summary = ", ".join(trigger_reasons) if trigger_reasons else "unknown"
+            compact_error_detail = _truncate_text(_format_exception_for_log(e), max_chars=1200)
                         
             # For overloaded/rate limit errors, use exponential backoff
-            if (is_auth_error or is_server_error or is_overloaded or is_rate_limited) and attempt < max_retries - 1:
-                fallback_model = get_fallback_model(current_model, tried_models_in_this_call)
-                log_message(log_file, f"{log_prefix}: Switching from {current_model} to fallback model {fallback_model} due to error.")
+            if (is_auth_error or is_server_error or is_overloaded or is_rate_limited or is_quota_error) and attempt < max_retries - 1:
+                fallback_model = get_fallback_model(
+                    current_model,
+                    tried_models_in_this_call,
+                    messages=messages,
+                    available_models=available_proxy_models,
+                )
+                if fallback_model is None:
+                    log_message(log_file, f"{log_prefix}: No fallback candidate found for {current_model} (attempt {attempt+1}/{max_retries}, reason={reason_summary}, tried={sorted(tried_models_in_this_call)}).")
+                    break
+                log_message(log_file, f"{log_prefix}: Switching from {current_model} to fallback model {fallback_model} (attempt {attempt+1}/{max_retries}, reason={reason_summary}, detail={compact_error_detail}).")
                 current_model = fallback_model
                 tried_models_in_this_call.add(current_model)
                 if current_model.startswith("gemini"):
@@ -342,7 +661,7 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
     
 
 def call_o1_pro_api(log_file, messages, model_name):
-    """Call OpenAI's gpt-5.1 model using the responses API"""
+    """Call OpenAI's gpt-5.4 model using the responses API"""
     log_message(log_file, f"Calling {model_name} using responses API...")
     start_time = time.time()
     
@@ -429,6 +748,7 @@ def call_o1_pro_api(log_file, messages, model_name):
         except Exception as e:
             error_str = str(e)
             log_message(log_file, f"Attempt {attempt+1}/{max_retries} failed: {error_str}")
+            log_message(log_file, f"Responses API error detail: {_format_exception_for_log(e)}")
             
             # Determine error type and appropriate action
             is_timeout = "timeout" in error_str.lower()
@@ -497,6 +817,90 @@ def clean_non_python_code(code):
 
     return '\n'.join(cleaned_lines)
 
+
+def _looks_like_valid_python(code):
+    """Return True if code compiles as Python."""
+    if not code or not code.strip():
+        return False
+    try:
+        compile(code, "<generated>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+
+def _extract_fenced_blocks(text):
+    """Extract fenced code blocks as (language, code) tuples."""
+    pattern = r"```([^\n`]*)\n([\s\S]*?)```"
+    blocks = []
+    for m in re.finditer(pattern, text):
+        language = (m.group(1) or "").strip().lower()
+        code = m.group(2).strip()
+        blocks.append((language, code))
+    return blocks
+
+
+def _trim_to_pythonish_region(text):
+    """Trim noisy prose and keep likely Python script region."""
+    lines = text.splitlines()
+    start = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ", "def ", "class ", "if __name__")):
+            start = idx
+            break
+    if start is None:
+        return ""
+
+    candidate_lines = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            break
+        candidate_lines.append(line)
+    return "\n".join(candidate_lines).strip()
+
+
+def _extract_best_python_candidate(text):
+    """Pick the best syntactically valid Python snippet from model output."""
+    preferred_langs = {"python", "py", ""}
+
+    def _score_candidate(code):
+        score = 0
+        if not _looks_like_valid_python(code):
+            return -1000
+
+        if "x.bin" in code:
+            score += 6
+        if re.search(r"open\(\s*['\"]x\.bin['\"]", code):
+            score += 8
+        if "with open(" in code:
+            score += 3
+        if len(code) >= 200:
+            score += 1
+        return score
+
+    candidates = []
+    for language, code in _extract_fenced_blocks(text):
+        if language not in preferred_langs:
+            continue
+        cleaned = clean_non_python_code(code).strip()
+        if cleaned:
+            candidates.append(cleaned)
+
+    # Fallback candidate: sometimes model returns script without proper fences
+    trimmed = clean_non_python_code(_trim_to_pythonish_region(text)).strip()
+    if trimmed:
+        candidates.append(trimmed)
+
+    if candidates:
+        best = max(candidates, key=_score_candidate)
+        # Require explicit x.bin intent to avoid selecting analytical stubs.
+        if _score_candidate(best) >= 6:
+            return best
+
+    return None
+
 def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30):
     """    
     Args:
@@ -507,16 +911,10 @@ def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30)
     Returns:
         str: Extracted Python code or None if extraction failed
     """
-    quick_pattern = r"```(?:python)?\s*([\s\S]*?)```"
-    m = re.search(quick_pattern, text)
-    if m:
-        candidate = m.group(1).strip()
-        if candidate:                     # non-empty code
-            # Clean up non-Python code (C/C++ comments, code blocks)
-            candidate = clean_non_python_code(candidate)
-            log_message(log_file,
-                        f"Quick-path extracted {len(candidate)} chars of code")
-            return candidate  
+    candidate = _extract_best_python_candidate(text)
+    if candidate:
+        log_message(log_file, f"Quick-path extracted {len(candidate)} chars of code")
+        return candidate
             
     prompt = f"Please extract the Python code from the following text to generate a correct exploit. Return with markdown code blocks ```python ```. No comment. No explanation.\n\nHere is the text:\n{text}"
     messages = [{"role": "user", "content": prompt}]
@@ -526,10 +924,12 @@ def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30)
             print(f"Attempt {attempt+1}/{max_retries+1} to extract code with {use_a_model}")
             start_time = time.time()
                             
+            litellm_model, litellm_kwargs = _build_litellm_request(log_file, use_a_model)
             response = completion(
-                model=use_a_model,
+                model=litellm_model,
                 messages=messages,
-                timeout=timeout
+                timeout=timeout,
+                **litellm_kwargs,
             )
             
             end_time = time.time()
@@ -537,24 +937,11 @@ def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30)
             
             returned_text = response['choices'][0]['message']['content']
             
-            # Extract code from markdown blocks
-            pattern = r"```(?:python)?\s*([\s\S]*?)```"
-            matches = re.findall(pattern, returned_text)
-            if matches:
-                extracted_code = matches[0].strip()
-                if extracted_code:
-                    # Clean up non-Python code
-                    extracted_code = clean_non_python_code(extracted_code)
-                    # print(f"Successfully extracted {len(extracted_code)} characters of code")
-                    return extracted_code
-                print("Extracted code block was empty")
-            else:
-                print("No code blocks found in response")
-                
-                # If no code blocks but response looks like code, return it directly
-                if "def " in returned_text or "class " in returned_text or "import " in returned_text:
-                    print("Response looks like code, returning directly")
-                    return returned_text.strip()
+            extracted_code = _extract_best_python_candidate(returned_text)
+            if extracted_code:
+                return extracted_code
+
+            print("No valid Python code found in extraction response")
             
         except Exception as e:
             error_msg = f"Error with {use_a_model} (attempt {attempt+1}): {str(e)}"
@@ -566,27 +953,30 @@ def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30)
                 print(f"Waiting {wait_time} seconds before retry")
                 time.sleep(wait_time)
     
-    use_another_model = CLAUDE_MODEL_SONNET_45
-    try:
-        print(f"Falling back to {use_another_model}")
+    tried_models = {use_a_model}
+    use_another_model = get_fallback_model(
+        use_a_model,
+        tried_models,
+        messages=messages,
+        available_models=_fetch_proxy_models(log_file),
+    )
 
-        returned_text, success = call_llm(log_file, messages, use_another_model)
-        if success:
-            # Extract code from markdown blocks
-            pattern = r"```(?:python)?\s*([\s\S]*?)```"
-            matches = re.findall(pattern, returned_text)
-            if matches:
-                extracted_code = matches[0].strip()
+    if use_another_model and use_another_model != use_a_model:
+        try:
+            print(f"Falling back to {use_another_model}")
+
+            returned_text, success = call_llm(log_file, messages, use_another_model)
+            if success:
+                extracted_code = _extract_best_python_candidate(returned_text)
                 if extracted_code:
-                    # Clean up non-Python code
-                    extracted_code = clean_non_python_code(extracted_code)
-                    # print(f"Successfully extracted {len(extracted_code)} characters of code with fallback model")
                     return extracted_code
-        else:
-            print(f"Fallback to {use_another_model} also failed")
+            else:
+                print(f"Fallback to {use_another_model} also failed")
 
-    except Exception as e:
-        print(f"Fallback to {use_another_model} also failed: {str(e)}")
+        except Exception as e:
+            print(f"Fallback to {use_another_model} also failed: {str(e)}")
+    else:
+        print("No secondary model configured for extraction fallback")
     
     # Last resort: try to extract code directly from the input text
     print("Attempting direct code extraction from input text")
@@ -619,10 +1009,12 @@ def extract_python_code_from_response(log_file, text, max_retries=2, timeout=30)
             potential_code_segments.append(code_chunk)
     
     if potential_code_segments:
-        # Return the longest segment
-        longest_segment = max(potential_code_segments, key=len)
-        print(f"Extracted {len(longest_segment)} characters directly from text")
-        return longest_segment
+        # Prefer a segment that compiles as Python.
+        for segment in sorted(potential_code_segments, key=len, reverse=True):
+            candidate = clean_non_python_code(segment).strip()
+            if _looks_like_valid_python(candidate):
+                print(f"Extracted {len(candidate)} characters directly from text")
+                return candidate
     
     print("All extraction methods failed")
     return None
@@ -1030,6 +1422,45 @@ def find_fuzzer_source(log_file, fuzzer_path, project_name, project_src_dir, foc
     project_dir = fuzzer_path.split("/fuzz-tooling/build/out")[0] + "/"
     
     log_message(log_file, f"Looking for source of {fuzzer_name} in {project_src_dir}")
+
+    # Deterministic fallback: map fuzzer binary -> source files via generated Ninja manifest.
+    # This avoids relying on an LLM/API key just to identify harness sources.
+    ninja_candidates = [
+        os.path.join(project_src_dir, "out", "Fuzz", "obj", f"{fuzzer_name}.ninja"),
+        os.path.join(project_src_dir, "out", "FuzzDebug", "obj", f"{fuzzer_name}.ninja"),
+    ]
+    for ninja_file in ninja_candidates:
+        if not os.path.exists(ninja_file):
+            continue
+        try:
+            with open(ninja_file, 'r') as nf:
+                ninja_content = nf.read()
+            source_matches = re.findall(r": cxx\s+([^\s]+)", ninja_content)
+            source_chunks = []
+            seen_sources = set()
+            # Paths in generated ninja files are relative to the build root (e.g. out/Fuzz),
+            # not the obj/ folder containing the .ninja file itself.
+            build_root = os.path.dirname(os.path.dirname(ninja_file))
+            for rel_src in source_matches:
+                src_path = os.path.normpath(os.path.join(build_root, rel_src))
+                if src_path in seen_sources or not os.path.exists(src_path):
+                    continue
+                seen_sources.add(src_path)
+                if not any(src_path.endswith(ext) for ext in ['.c', '.cc', '.cpp', '.java']):
+                    continue
+                try:
+                    with open(src_path, 'r') as sf:
+                        code = sf.read()
+                    if code and len(code) < 200000:
+                        source_chunks.append(f"// Source: {src_path}\n{strip_license_text(code)}")
+                except Exception:
+                    continue
+
+            if source_chunks:
+                log_message(log_file, f"Resolved fuzzer source from Ninja manifest: {ninja_file}")
+                return "\n\n".join(source_chunks)
+        except Exception as e:
+            log_message(log_file, f"Error parsing Ninja manifest {ninja_file}: {str(e)}")
     
     # Extract the base name without _fuzzer suffix if present
     base_name = fuzzer_name
@@ -1288,7 +1719,8 @@ Please respond with just the full path to the file you believe is the fuzzer sou
     
     # Call the model to identify the fuzzer source
     messages = [{"role": "user", "content": prompt}]
-    response, success = call_llm(log_file, messages, GEMINI_MODEL)
+    source_ident_model = MODELS[0] if MODELS else CLAUDE_MODEL
+    response, success = call_llm(log_file, messages, source_ident_model)
     
     if not success:
         log_message(log_file, "Failed to get model response for fuzzer source identification")
@@ -1373,6 +1805,11 @@ if False:
 def run_python_code(log_file, code, xbin_dir,blob_path):
     """Run the generated Python code to create x.bin"""
     log_message(log_file, f"run_python_code under: {xbin_dir}")
+    if "x.bin" not in code:
+        msg = "Generated script does not reference x.bin"
+        log_message(log_file, msg)
+        return False, "", msg
+
     # Validate xbin_dir
     if not xbin_dir or not os.path.isdir(xbin_dir):
         log_message(log_file, f"Invalid project directory: '{xbin_dir}'")

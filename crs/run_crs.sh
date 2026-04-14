@@ -6,21 +6,75 @@ mkdir -p logs
 VENV_DIR="/tmp/crs_venv"
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating Python virtual environment at $VENV_DIR..."
-    python3 -m venv "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR"; then
+        echo "ERROR: Failed to create Python virtual environment at $VENV_DIR"
+        echo "Hint: install python3-venv (or python3.12-venv) and retry"
+        exit 1
+    fi
+fi
+
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "WARN: Detected broken virtual environment at $VENV_DIR, recreating..."
+    rm -rf "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR"; then
+        echo "ERROR: Failed to recreate Python virtual environment at $VENV_DIR"
+        exit 1
+    fi
 fi
 
 # Activate venv and install dependencies
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "ERROR: Virtual environment activation script is missing: $VENV_DIR/bin/activate"
+    exit 1
+fi
 source "$VENV_DIR/bin/activate"
+
+if ! "$VENV_DIR/bin/python3" -m ensurepip --upgrade >/dev/null 2>&1; then
+    echo "WARN: ensurepip failed; continuing with existing pip setup"
+fi
+
+# Python 3.12+ venv may not include setuptools by default; openlit transitively imports pkg_resources.
+if ! "$VENV_DIR/bin/python3" -m pip install -q --upgrade pip setuptools wheel; then
+    echo "ERROR: Failed to bootstrap pip/setuptools/wheel in virtual environment"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/strategy/requirements.txt" ]; then
-    pip install -q -r "$SCRIPT_DIR/strategy/requirements.txt" 2>/dev/null
+    if ! "$VENV_DIR/bin/python3" -m pip install -q -r "$SCRIPT_DIR/strategy/requirements.txt"; then
+        echo "ERROR: Failed to install strategy Python dependencies"
+        exit 1
+    fi
 fi
+
+# Preserve explicit caller overrides for key fuzzer controls.
+_HAS_FUZZER_SELECTED="${FUZZER_SELECTED+1}"
+_OVERRIDE_FUZZER_SELECTED="$FUZZER_SELECTED"
+_HAS_FUZZER_DISCOVERY_MODE="${FUZZER_DISCOVERY_MODE+1}"
+_OVERRIDE_FUZZER_DISCOVERY_MODE="$FUZZER_DISCOVERY_MODE"
+_HAS_FUZZER_PER_TIMEOUT="${FUZZER_PER_FUZZER_TIMEOUT_MINUTES+1}"
+_OVERRIDE_FUZZER_PER_TIMEOUT="$FUZZER_PER_FUZZER_TIMEOUT_MINUTES"
+_HAS_AI_MODEL="${AI_MODEL+1}"
+_OVERRIDE_AI_MODEL="$AI_MODEL"
 
 # Load and export .env variables for Python strategies
 if [ -f "$SCRIPT_DIR/.env" ]; then
     set -a
     source "$SCRIPT_DIR/.env"
     set +a
+fi
+
+if [ -n "$_HAS_FUZZER_SELECTED" ]; then
+    export FUZZER_SELECTED="$_OVERRIDE_FUZZER_SELECTED"
+fi
+if [ -n "$_HAS_FUZZER_DISCOVERY_MODE" ]; then
+    export FUZZER_DISCOVERY_MODE="$_OVERRIDE_FUZZER_DISCOVERY_MODE"
+fi
+if [ -n "$_HAS_FUZZER_PER_TIMEOUT" ]; then
+    export FUZZER_PER_FUZZER_TIMEOUT_MINUTES="$_OVERRIDE_FUZZER_PER_TIMEOUT"
+fi
+if [ -n "$_HAS_AI_MODEL" ]; then
+    export AI_MODEL="$_OVERRIDE_AI_MODEL"
 fi
 
 DATE=$(date +"%Y%m%d_%H%M%S")

@@ -441,7 +441,6 @@ func runBasicStrategies(fuzzer, taskDir, projectDir, fuzzDir, language string,
 			runCmd.Env = append(os.Environ(),
 				"VIRTUAL_ENV=/tmp/crs_venv",
 				"PATH=/tmp/crs_venv/bin:"+os.Getenv("PATH"),
-				fmt.Sprintf("SUBMISSION_ENDPOINT=%s", basicConfig.SubmissionEndpoint),
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				// Pass through API credentials if they exist
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
@@ -453,6 +452,9 @@ func runBasicStrategies(fuzzer, taskDir, projectDir, fuzzDir, language string,
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", basicConfig.AnalysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
 			)
+			if shouldUseSubmissionService(basicConfig.SubmissionEndpoint) {
+				runCmd.Env = append(runCmd.Env, fmt.Sprintf("SUBMISSION_ENDPOINT=%s", basicConfig.SubmissionEndpoint))
+			}
 
 			// If we have an unharnessed fuzzer source path, pass it
 			if basicConfig.UnharnessedFuzzerSrcPath != "" {
@@ -812,7 +814,6 @@ func runAdvancedPOVStrategiesWithTimeout(
 			runCmd.Env = append(os.Environ(),
 				"VIRTUAL_ENV=/tmp/crs_venv",
 				"PATH=/tmp/crs_venv/bin:"+os.Getenv("PATH"),
-				fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint),
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
@@ -822,6 +823,9 @@ func runAdvancedPOVStrategiesWithTimeout(
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
 			)
+			if shouldUseSubmissionService(submissionEndpoint) {
+				runCmd.Env = append(runCmd.Env, fmt.Sprintf("SUBMISSION_ENDPOINT=%s", submissionEndpoint))
+			}
 
 			// If we have an unharnessed fuzzer source path, pass it
 			if unharnessedFuzzerSrcPath != "" {

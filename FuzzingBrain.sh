@@ -3,6 +3,14 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CRS_DIR="$SCRIPT_DIR/crs"
 
+# Local runs often use endpoints that don't implement submission-service APIs.
+# Allow override by setting CRS_DISABLE_SUBMISSION_SERVICE=false.
+export CRS_DISABLE_SUBMISSION_SERVICE="${CRS_DISABLE_SUBMISSION_SERVICE:-true}"
+
+# Default LLM proxy endpoint for OpenAI-compatible model lookup/completions.
+# Allow override by setting COPILOT_API_BASE_URL before running.
+export COPILOT_API_BASE_URL="${COPILOT_API_BASE_URL:-http://localhost:4141}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -298,10 +306,33 @@ check_environment() {
         return
     fi
 
+    # Preserve explicit caller overrides for fuzzer controls.
+    local _HAS_FUZZER_SELECTED="${FUZZER_SELECTED+1}"
+    local _OVERRIDE_FUZZER_SELECTED="$FUZZER_SELECTED"
+    local _HAS_FUZZER_DISCOVERY_MODE="${FUZZER_DISCOVERY_MODE+1}"
+    local _OVERRIDE_FUZZER_DISCOVERY_MODE="$FUZZER_DISCOVERY_MODE"
+    local _HAS_FUZZER_PER_TIMEOUT="${FUZZER_PER_FUZZER_TIMEOUT_MINUTES+1}"
+    local _OVERRIDE_FUZZER_PER_TIMEOUT="$FUZZER_PER_FUZZER_TIMEOUT_MINUTES"
+    local _HAS_AI_MODEL="${AI_MODEL+1}"
+    local _OVERRIDE_AI_MODEL="$AI_MODEL"
+
     # Load .env file
     set -a
     source "$env_file"
     set +a
+
+    if [ -n "$_HAS_FUZZER_SELECTED" ]; then
+        export FUZZER_SELECTED="$_OVERRIDE_FUZZER_SELECTED"
+    fi
+    if [ -n "$_HAS_FUZZER_DISCOVERY_MODE" ]; then
+        export FUZZER_DISCOVERY_MODE="$_OVERRIDE_FUZZER_DISCOVERY_MODE"
+    fi
+    if [ -n "$_HAS_FUZZER_PER_TIMEOUT" ]; then
+        export FUZZER_PER_FUZZER_TIMEOUT_MINUTES="$_OVERRIDE_FUZZER_PER_TIMEOUT"
+    fi
+    if [ -n "$_HAS_AI_MODEL" ]; then
+        export AI_MODEL="$_OVERRIDE_AI_MODEL"
+    fi
 
     # Check if at least one API key is set
     local has_api_key=false
@@ -444,7 +475,7 @@ if is_project_name "$TARGET"; then
     check_environment
 
     # Continue fuzzing with existing workspace (always in-place)
-    cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$WORKSPACE"
+    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 2: Git URL - Create workspace from scratch
@@ -544,7 +575,7 @@ elif is_git_url "$TARGET"; then
             cd "$SCRIPT_DIR"
         else
             # Generate diff between base and delta (or HEAD if delta not specified)
-            local target_commit="${DELTA_COMMIT:-HEAD}"
+            target_commit="${DELTA_COMMIT:-HEAD}"
             git diff "$BASE_COMMIT..$target_commit" > "$WORKSPACE/diff/ref.diff"
 
             if [ -s "$WORKSPACE/diff/ref.diff" ]; then
@@ -563,7 +594,7 @@ elif is_git_url "$TARGET"; then
     check_environment
 
     # Run CRS with the new workspace (always in-place since we just created it)
-    cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$WORKSPACE"
+    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 3: Local path - Use existing workspace
@@ -579,8 +610,8 @@ else
 
     # Pass through to original run_crs.sh
     if [ "$IN_PLACE" = true ]; then
-        cd "$CRS_DIR" && sudo ./run_crs.sh --in-place "$TARGET"
+        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$TARGET"
     else
-        cd "$CRS_DIR" && sudo ./run_crs.sh "$TARGET"
+        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh "$TARGET"
     fi
 fi

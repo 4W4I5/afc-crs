@@ -372,9 +372,9 @@ var (
 
 // LLMModels we want to compare; you can adapt these to real endpoints
 var (
-	CLAUDE_MODEL        = "claude-sonnet-4"
+	CLAUDE_MODEL        = "claude-sonnet-4.6"
 	OPENAI_MODEL        = "gpt-4o-2024-11-20"
-	GEMINI_MODEL_PRO_25 = "gemini-2.5-pro"
+	GEMINI_MODEL_PRO_25 = "gemini-3.1-pro-preview"
 	GEMINI_MODEL        = "gemini-3-flash-preview"
 )
 
