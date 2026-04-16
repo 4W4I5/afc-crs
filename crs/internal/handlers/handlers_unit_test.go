@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -213,26 +212,19 @@ func TestSubmitTaskForwardsToServices(t *testing.T) {
 	ms := &mockService{}
 	h := NewHandler(ms, "", "")
 
-	var analysisWG, submissionWG sync.WaitGroup
-	analysisWG.Add(1)
-	submissionWG.Add(1)
+	analysisDone := make(chan struct{}, 1)
 
 	analysisServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer analysisWG.Done()
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusOK)
+		select {
+		case analysisDone <- struct{}{}:
+		default:
+		}
 	}))
 	defer analysisServer.Close()
 
-	submissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer submissionWG.Done()
-		io.Copy(io.Discard, r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer submissionServer.Close()
-
 	h.analysisService = analysisServer.URL
-	h.submissionService = submissionServer.URL
 
 	router := setupRouter(h)
 
@@ -260,8 +252,12 @@ func TestSubmitTaskForwardsToServices(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, w.Code)
 	assert.Len(t, ms.submitTaskCalls, 1)
 
-	analysisWG.Wait()
-	submissionWG.Wait()
+	select {
+	case <-analysisDone:
+		// analysis forward observed
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for analysis forwarding request")
+	}
 }
 
 func TestCancelTask(t *testing.T) {

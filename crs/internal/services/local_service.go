@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/config"
 	"crs/internal/executor"
 	"crs/internal/models"
@@ -36,18 +35,11 @@ type LocalCRSService struct {
 	workerIndex             string
 	analysisServiceUrl      string
 	model                   string
-	competitionClient       *competition.Client
 	unharnessedFuzzerSrc    sync.Map
 }
 
 // NewLocalService creates a new local service instance
 func NewLocalService(cfg *config.Config) CRSService {
-	// Get API configuration from config
-	apiEndpoint := os.Getenv("COMPETITION_API_ENDPOINT")
-	if apiEndpoint == "" {
-		apiEndpoint = "http://localhost:4141"
-	}
-
 	// Define default work directory
 	workDir := "/crs-workdir"
 	if envWorkDir := os.Getenv("CRS_WORKDIR"); envWorkDir != "" {
@@ -80,15 +72,19 @@ func NewLocalService(cfg *config.Config) CRSService {
 		}
 	}
 
+	submissionEndpoint := cfg.Services.SubmissionURL
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		submissionEndpoint = ""
+	}
+
 	return &LocalCRSService{
 		cfg:                     cfg,
 		workDir:                 workDir,
-		competitionClient:       competition.NewClient(apiEndpoint, cfg.Auth.KeyID, cfg.Auth.Token),
 		povMetadataDir:          "successful_povs",
 		povMetadataDir0:         "successful_povs_0",
 		povAdvcancedMetadataDir: "successful_povs_advanced",
 		model:                   cfg.AI.Model,
-		submissionEndpoint:      cfg.Services.SubmissionURL,
+		submissionEndpoint:      submissionEndpoint,
 		workerIndex:             "",
 		analysisServiceUrl:      cfg.Services.AnalysisURL,
 	}

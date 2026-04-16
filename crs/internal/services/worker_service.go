@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/config"
 	"crs/internal/executor"
 	"crs/internal/models"
@@ -41,7 +40,6 @@ type WorkerCRSService struct {
 	workerIndex             string
 	analysisServiceUrl      string
 	model                   string
-	competitionClient       *competition.Client
 	unharnessedFuzzerSrc    sync.Map
 	workerPort              int
 
@@ -51,12 +49,6 @@ type WorkerCRSService struct {
 
 // NewWorkerService creates a new worker service instance
 func NewWorkerService(cfg *config.Config) CRSService {
-	// Get API configuration from config
-	apiEndpoint := os.Getenv("COMPETITION_API_ENDPOINT")
-	if apiEndpoint == "" {
-		apiEndpoint = "http://localhost:4141"
-	}
-
 	// Define default work directory
 	workDir := "/crs-workdir"
 	if envWorkDir := os.Getenv("CRS_WORKDIR"); envWorkDir != "" {
@@ -89,17 +81,21 @@ func NewWorkerService(cfg *config.Config) CRSService {
 		}
 	}
 
+	submissionEndpoint := cfg.Services.SubmissionURL
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		submissionEndpoint = ""
+	}
+
 	service := &WorkerCRSService{
 		cfg:                     cfg,
 		workDir:                 workDir,
-		competitionClient:       competition.NewClient(apiEndpoint, cfg.Auth.KeyID, cfg.Auth.Token),
 		povMetadataDir:          "successful_povs",
 		povMetadataDir0:         "successful_povs_0",
 		povAdvcancedMetadataDir: "successful_povs_advanced",
 		patchWorkDir:            "patch_workspace",
 		model:                   cfg.AI.Model,
 		workerIndex:             cfg.Worker.Index,
-		submissionEndpoint:      cfg.Services.SubmissionURL,
+		submissionEndpoint:      submissionEndpoint,
 		analysisServiceUrl:      cfg.Services.AnalysisURL,
 		workerPort:              cfg.Worker.Port,
 	}
@@ -560,6 +556,11 @@ func (s *WorkerCRSService) processSarif(taskID string, broadcast models.SARIFBro
 }
 
 func (s *WorkerCRSService) checkIfSarifValid(taskID string, broadcast models.SARIFBroadcastDetail) (bool, error) {
+	if !shouldUseSubmissionService(s.submissionEndpoint) {
+		log.Printf("Skipping SARIF validity check: submission service is disabled")
+		return false, nil
+	}
+
 	broadcastJSON, err := json.Marshal(broadcast)
 	if err != nil {
 		log.Printf("Error json.Marshal for broadcast SarifID %s: %v", broadcast.SarifID, err)
@@ -579,8 +580,8 @@ func (s *WorkerCRSService) checkIfSarifValid(taskID string, broadcast models.SAR
 		req.Header.Set("Content-Type", "application/json")
 
 		// Get API credentials from environment
-		apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-		apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+		apiKeyID := os.Getenv("CRS_KEY_ID")
+		apiToken := os.Getenv("CRS_KEY_TOKEN")
 		if apiKeyID != "" && apiToken != "" {
 			req.SetBasicAuth(apiKeyID, apiToken)
 		}
@@ -637,6 +638,11 @@ func (s *WorkerCRSService) checkIfSarifValid(taskID string, broadcast models.SAR
 }
 
 func (s *WorkerCRSService) checkIfSarifInValid(taskID string, ctxs []models.CodeContext, broadcast models.SARIFBroadcastDetail) (int, error) {
+	if !shouldUseSubmissionService(s.submissionEndpoint) {
+		log.Printf("Skipping SARIF invalidity check: submission service is disabled")
+		return 0, nil
+	}
+
 	payload := struct {
 		Broadcast models.SARIFBroadcastDetail `json:"broadcast"`
 		Contexts  []models.CodeContext        `json:"contexts"`
@@ -664,8 +670,8 @@ func (s *WorkerCRSService) checkIfSarifInValid(taskID string, ctxs []models.Code
 		req.Header.Set("Content-Type", "application/json")
 
 		// Get API credentials from environment
-		apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-		apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+		apiKeyID := os.Getenv("CRS_KEY_ID")
+		apiToken := os.Getenv("CRS_KEY_TOKEN")
 		if apiKeyID != "" && apiToken != "" {
 			req.SetBasicAuth(apiKeyID, apiToken)
 		}
@@ -702,6 +708,11 @@ func (s *WorkerCRSService) checkIfSarifInValid(taskID string, ctxs []models.Code
 }
 
 func (s *WorkerCRSService) submitSarifInvalid(taskID string, broadcast models.SARIFBroadcastDetail) error {
+	if !shouldUseSubmissionService(s.submissionEndpoint) {
+		log.Printf("Skipping SARIF invalid submission: submission service is disabled")
+		return nil
+	}
+
 	url := fmt.Sprintf("%s/v1/sarifx/invalid/%s/%s/", s.submissionEndpoint, taskID, broadcast.SarifID)
 
 	broadcastJSON, err := json.Marshal(broadcast)
@@ -722,8 +733,8 @@ func (s *WorkerCRSService) submitSarifInvalid(taskID string, broadcast models.SA
 		req.Header.Set("Content-Type", "application/json")
 
 		// Get API credentials from environment
-		apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-		apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+		apiKeyID := os.Getenv("CRS_KEY_ID")
+		apiToken := os.Getenv("CRS_KEY_TOKEN")
 		if apiKeyID != "" && apiToken != "" {
 			req.SetBasicAuth(apiKeyID, apiToken)
 		}
@@ -826,8 +837,6 @@ func (s *WorkerCRSService) runSarifPOVStrategies(myFuzzer, taskDir, sarifFilePat
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", s.cfg.Auth.KeyID),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", s.cfg.Auth.Token),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				fmt.Sprintf("WORKER_INDEX=%s", s.workerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", s.analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
@@ -991,8 +1000,6 @@ func (s *WorkerCRSService) runXPatchSarifStrategies(myFuzzer, taskDir, sarifFile
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", s.cfg.Auth.KeyID),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", s.cfg.Auth.Token),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				fmt.Sprintf("WORKER_INDEX=%s", s.workerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", s.analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",

@@ -45,7 +45,7 @@ type WorkerConfig struct {
 
 // ServicesConfig holds external service URLs
 type ServicesConfig struct {
-	SubmissionURL string `envconfig:"SUBMISSION_SERVICE" default:"http://crs-sub"`
+	SubmissionURL string `envconfig:"SUBMISSION_SERVICE" default:""`
 	AnalysisURL   string `envconfig:"ANALYSIS_SERVICE" default:"http://crs-analysis"`
 }
 
@@ -241,7 +241,7 @@ func Load() (*Config, error) {
 		os.Getenv("ANALYSIS_SERVICE_TEST") != "" ||
 		os.Getenv("SUBMISSION_SERVICE_TEST") != "" {
 		cfg.Services.AnalysisURL = "http://localhost:7082"
-		cfg.Services.SubmissionURL = "http://localhost:4141"
+		cfg.Services.SubmissionURL = ""
 	}
 
 	// Auto-extract worker index from pod name if not set

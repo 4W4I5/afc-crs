@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"crs/internal/competition"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,32 +97,13 @@ func TestInitializeWorkDirFallback(t *testing.T) {
 	assert.True(t, info.IsDir())
 }
 
-func TestInitializeCompetitionAPI(t *testing.T) {
-	t.Setenv("COMPETITION_API_ENDPOINT", "http://custom-endpoint")
-	t.Setenv("CRS_KEY_ID", "key")
-	t.Setenv("CRS_KEY_TOKEN", "token")
+func TestShouldUseSubmissionService(t *testing.T) {
+	t.Setenv("CRS_DISABLE_SUBMISSION_SERVICE", "true")
+	assert.False(t, shouldUseSubmissionService("http://submission"))
 
-	endpoint, key, token := initializeCompetitionAPI()
-	assert.Equal(t, "http://custom-endpoint", endpoint)
-	assert.Equal(t, "key", key)
-	assert.Equal(t, "token", token)
-}
-
-func TestInitializeCompetitionAPIUsesDefaults(t *testing.T) {
-	t.Setenv("COMPETITION_API_ENDPOINT", "")
-	t.Setenv("CRS_KEY_ID", "")
-	t.Setenv("CRS_KEY_TOKEN", "")
-
-	endpoint, key, token := initializeCompetitionAPI()
-	assert.Equal(t, "http://localhost:4141", endpoint)
-	assert.Empty(t, key)
-	assert.Empty(t, token)
-}
-
-func TestInitializeCompetitionClient(t *testing.T) {
-	client := initializeCompetitionClient("http://endpoint", "key", "token")
-	require.NotNil(t, client)
-	assert.IsType(t, &competition.Client{}, client)
+	t.Setenv("CRS_DISABLE_SUBMISSION_SERVICE", "false")
+	assert.True(t, shouldUseSubmissionService("http://submission"))
+	assert.False(t, shouldUseSubmissionService(""))
 }
 
 func TestGetAverageCPUUsage(t *testing.T) {

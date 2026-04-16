@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/models"
 	"crs/internal/utils/helpers"
 	"crs/internal/utils/libfuzzer"
@@ -342,7 +341,6 @@ type POVSubmissionParams struct {
 	VulnSignature         string
 	SubmissionEndpoint    string
 	WorkerIndex           string
-	CompetitionClient     *competition.Client
 	POVMetadataDir        string
 	UnharnessedFuzzerSrc  map[string]string
 }
@@ -361,7 +359,13 @@ func GenerateCrashSignatureAndSubmit(params POVSubmissionParams) error {
 	encodedCrashData := base64.StdEncoding.EncodeToString(crashData)
 
 
-	// 2. Submit to either the submission service (if in worker mode) or directly to the Competition API
+	// Submission reporting is retired when submission service is disabled or unavailable.
+	if !shouldUseSubmissionService(params.SubmissionEndpoint) || params.WorkerIndex == "" {
+		log.Printf("Skipping POV submission for fuzzer %s: submission service is disabled or worker context is missing", params.Fuzzer)
+		return nil
+	}
+
+	// Submit to the submission service in worker mode.
 	if params.SubmissionEndpoint != "" && params.WorkerIndex != "" {
 		// We're in worker mode, submit to the submission service
 		log.Printf("Libfuzzer Worker %s submitting POV for fuzzer %s with sanitizer %s to submission service",
@@ -453,13 +457,9 @@ func GenerateCrashSignatureAndSubmit(params POVSubmissionParams) error {
 			req.Header.Set("Content-Type", "application/json")
 
 			// Get API credentials from environment
-			apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-			apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+			apiKeyID := os.Getenv("CRS_KEY_ID")
+			apiToken := os.Getenv("CRS_KEY_TOKEN")
 			if apiKeyID != "" && apiToken != "" {
-				req.SetBasicAuth(apiKeyID, apiToken)
-			} else {
-				apiKeyID = os.Getenv("CRS_KEY_ID")
-				apiToken = os.Getenv("CRS_KEY_TOKEN")
 				req.SetBasicAuth(apiKeyID, apiToken)
 			}
 
@@ -502,18 +502,6 @@ func GenerateCrashSignatureAndSubmit(params POVSubmissionParams) error {
 		}
 
 		log.Printf("Successfully submitted POV to submission service")
-	} else {
-		// 3. Submit to Competition API using the client
-		log.Printf("Submitting POV for fuzzer %s with sanitizer %s", params.Fuzzer, params.Sanitizer)
-		_, err := params.CompetitionClient.SubmitPOV(
-			params.TaskDetail.TaskID.String(),
-			params.Fuzzer,
-			params.Sanitizer,
-			crashData,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to submit POV: %v", err)
-		}
 	}
 
 	return nil
@@ -521,6 +509,10 @@ func GenerateCrashSignatureAndSubmit(params POVSubmissionParams) error {
 
 // GetValidPOVs retrieves valid POVs from the submission service
 func GetValidPOVs(taskID string, submissionEndpoint string) ([]models.POVSubmission, error) {
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		return []models.POVSubmission{}, nil
+	}
+
 	url := fmt.Sprintf("%s/v1/task/%s/valid_povs/", submissionEndpoint, taskID)
 	//TODO set headers
 	resp, err := http.Get(url)
@@ -561,8 +553,8 @@ func GetPOVStatsFromSubmissionService(taskID string, submissionEndpoint string) 
 		req.Header.Set("Content-Type", "application/json")
 
 		// Get API credentials from environment
-		apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-		apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+		apiKeyID := os.Getenv("CRS_KEY_ID")
+		apiToken := os.Getenv("CRS_KEY_TOKEN")
 		if apiKeyID != "" && apiToken != "" {
 			req.SetBasicAuth(apiKeyID, apiToken)
 		}

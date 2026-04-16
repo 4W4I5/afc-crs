@@ -31,13 +31,11 @@ func newTestConfig() *config.Config {
 func TestNewLocalServiceInitializesWorkDir(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("CRS_WORKDIR", tempDir)
-	t.Setenv("COMPETITION_API_ENDPOINT", "http://custom")
 
 	service := NewLocalService(newTestConfig())
 	local, ok := service.(*LocalCRSService)
 	require.True(t, ok)
 
-	assert.NotNil(t, local.competitionClient)
 	assert.Equal(t, tempDir, local.workDir)
 	assert.Equal(t, "http://submission", local.submissionEndpoint)
 	assert.Equal(t, "http://analysis", local.analysisServiceUrl)

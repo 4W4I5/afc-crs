@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/models"
 	"crs/internal/utils/helpers"
 
@@ -31,7 +30,6 @@ var (
 // baseService contains fields and methods shared by all service implementations
 type baseService struct {
 	workDir            string
-	competitionClient  *competition.Client
 	submissionEndpoint string
 	analysisServiceUrl string
 	model              string
@@ -56,6 +54,18 @@ func (b *baseService) SetSubmissionEndpoint(endpoint string) {
 // SetAnalysisServiceUrl sets the analysis service URL
 func (b *baseService) SetAnalysisServiceUrl(url string) {
 	b.analysisServiceUrl = url
+}
+
+func isSubmissionServiceDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("CRS_DISABLE_SUBMISSION_SERVICE")))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func shouldUseSubmissionService(submissionEndpoint string) bool {
+	if strings.TrimSpace(submissionEndpoint) == "" {
+		return false
+	}
+	return !isSubmissionServiceDisabled()
 }
 
 // initializeWorkDir initializes and returns the working directory
@@ -93,29 +103,6 @@ func initializeWorkDir() string {
 
 	return workDir
 }
-
-// initializeCompetitionAPI initializes competition API credentials
-func initializeCompetitionAPI() (endpoint, keyID, token string) {
-	endpoint = os.Getenv("COMPETITION_API_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "http://localhost:4141"
-	}
-
-	keyID = os.Getenv("CRS_KEY_ID")
-	token = os.Getenv("CRS_KEY_TOKEN")
-
-	if keyID == "" || token == "" {
-		log.Printf("Warning: CRS_KEY_ID or CRS_KEY_TOKEN not set")
-	}
-
-	return endpoint, keyID, token
-}
-
-// initializeCompetitionClient creates a new competition client
-func initializeCompetitionClient(endpoint, keyID, token string) *competition.Client {
-	return competition.NewClient(endpoint, keyID, token)
-}
-
 // ============================================================================
 // Shared Types (migrated from crs_services.go)
 // ============================================================================

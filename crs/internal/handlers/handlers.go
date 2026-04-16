@@ -166,9 +166,6 @@ func (h *Handler) SubmitLocalTask(taskPath string) {
 	if os.Getenv("ANALYSIS_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
 		h.analysisService = "http://localhost:7082"
 	}
-	if os.Getenv("SUBMISSION_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
-		h.submissionService = "http://localhost:4141"
-	}
 
 	h.crs.SubmitLocalTask(taskPath)
 }
@@ -211,9 +208,6 @@ func (h *Handler) SubmitTask(c *gin.Context) {
 	if os.Getenv("ANALYSIS_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
 		h.analysisService = "http://localhost:7082"
 	}
-	if os.Getenv("SUBMISSION_SERVICE_TEST") != "" || os.Getenv("LOCAL_TEST") != "" {
-		h.submissionService = "http://localhost:4141"
-	}
 
 	if true {
 		// Make a copy of task if needed (to avoid race conditions)
@@ -236,13 +230,11 @@ func (h *Handler) SubmitTask(c *gin.Context) {
 			// Set content type
 			req.Header.Set("Content-Type", "application/json")
 
-			// Add Basic Authentication from environment variables
-			apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-			apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+			// Add CRS basic auth when configured.
+			apiKeyID := os.Getenv("CRS_KEY_ID")
+			apiToken := os.Getenv("CRS_KEY_TOKEN")
 			if apiKeyID != "" && apiToken != "" {
 				req.SetBasicAuth(apiKeyID, apiToken)
-			} else {
-				log.Printf("Warning: API credentials not found in environment variables")
 			}
 
 			// Create an HTTP client and send the request
@@ -275,63 +267,6 @@ func (h *Handler) SubmitTask(c *gin.Context) {
 			}
 
 			log.Printf("Successfully forwarded to the analysis server: %s", taskCopy.MessageID)
-		}()
-
-		go func() {
-			taskJSON, err := json.Marshal(taskCopy)
-			if err != nil {
-				log.Printf("Error processing taskJSON: %v", err)
-				return
-			}
-			// Create a new request with the proper method, URL, and body
-			req, err := http.NewRequest("POST", fmt.Sprintf("%s/v1/task", h.submissionService), bytes.NewBuffer(taskJSON))
-			if err != nil {
-				log.Printf("Error creating request: %v", err)
-				return
-			}
-
-			// Set content type
-			req.Header.Set("Content-Type", "application/json")
-
-			// Add Basic Authentication from environment variables
-			apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-			apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
-			if apiKeyID != "" && apiToken != "" {
-				req.SetBasicAuth(apiKeyID, apiToken)
-			} else {
-				log.Printf("Warning: API credentials not found in environment variables")
-			}
-
-			// Create an HTTP client and send the request
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("Error sending request: %v", err)
-				return
-			}
-			defer resp.Body.Close()
-
-			// Read response
-			respBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Printf("Error reading response: %v", err)
-				return
-			}
-
-			// Print response
-			fmt.Printf("\nResponse from submission server (status %d):\n", resp.StatusCode)
-
-			// Format JSON response if possible
-			var prettyJSON bytes.Buffer
-			err = json.Indent(&prettyJSON, respBody, "", "  ")
-			if err != nil {
-				// Not valid JSON, print as-is
-				fmt.Println(string(respBody))
-			} else {
-				fmt.Println(prettyJSON.String())
-			}
-
-			log.Printf("Successfully forwarded to the submission server: %s", taskCopy.MessageID)
 		}()
 		// The main thread continues immediately here
 	}

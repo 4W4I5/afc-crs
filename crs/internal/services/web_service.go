@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/config"
 	"crs/internal/models"
 	"crs/internal/utils/environment"
@@ -29,7 +28,6 @@ type WebCRSService struct {
 	tasks                   map[string]*models.TaskDetail
 	tasksMutex              sync.RWMutex
 	workDir                 string
-	competitionClient       *competition.Client
 	statusMutex             sync.RWMutex
 	status                  models.StatusTasksState
 	povMetadataDir          string
@@ -56,12 +54,6 @@ type WebCRSService struct {
 
 // NewWebService creates a new web service instance
 func NewWebService(cfg *config.Config) CRSService {
-	// Get API configuration from config
-	apiEndpoint := os.Getenv("COMPETITION_API_ENDPOINT")
-	if apiEndpoint == "" {
-		apiEndpoint = "http://localhost:4141"
-	}
-
 	// Define default work directory
 	workDir := "/crs-workdir"
 	if envWorkDir := os.Getenv("CRS_WORKDIR"); envWorkDir != "" {
@@ -94,11 +86,15 @@ func NewWebService(cfg *config.Config) CRSService {
 		}
 	}
 
+	submissionEndpoint := cfg.Services.SubmissionURL
+	if !shouldUseSubmissionService(submissionEndpoint) {
+		submissionEndpoint = ""
+	}
+
 	service := &WebCRSService{
 		cfg:                     cfg,
 		tasks:                   make(map[string]*models.TaskDetail),
 		workDir:                 workDir,
-		competitionClient:       competition.NewClient(apiEndpoint, cfg.Auth.KeyID, cfg.Auth.Token),
 		status:                  models.StatusTasksState{},
 		povMetadataDir:          "successful_povs",
 		povMetadataDir0:         "successful_povs_0",
@@ -107,7 +103,7 @@ func NewWebService(cfg *config.Config) CRSService {
 		workerNodes:             cfg.Worker.Nodes,
 		workerBasePort:          cfg.Server.WorkerBasePort,
 		model:                   cfg.AI.Model,
-		submissionEndpoint:      cfg.Services.SubmissionURL,
+		submissionEndpoint:      submissionEndpoint,
 		analysisServiceUrl:      cfg.Services.AnalysisURL,
 		totalTasksDistributed:   0,
 		workerStatus:            make(map[int]*WorkerStatus),

@@ -54,8 +54,8 @@ func TestLoad_DefaultValues(t *testing.T) {
 	}
 
 	// Test Services defaults
-	if cfg.Services.SubmissionURL != "http://crs-sub" {
-		t.Errorf("Expected default Services.SubmissionURL='http://crs-sub', got '%s'", cfg.Services.SubmissionURL)
+	if cfg.Services.SubmissionURL != "" {
+		t.Errorf("Expected default Services.SubmissionURL='', got '%s'", cfg.Services.SubmissionURL)
 	}
 	if cfg.Services.AnalysisURL != "http://crs-analysis" {
 		t.Errorf("Expected default Services.AnalysisURL='http://crs-analysis', got '%s'", cfg.Services.AnalysisURL)
@@ -134,8 +134,8 @@ func TestLoad_TestModeOverride(t *testing.T) {
 	if cfg.Services.AnalysisURL != "http://localhost:7082" {
 		t.Errorf("Expected test mode AnalysisURL='http://localhost:7082', got '%s'", cfg.Services.AnalysisURL)
 	}
-	if cfg.Services.SubmissionURL != "http://localhost:4141" {
-		t.Errorf("Expected test mode SubmissionURL='http://localhost:4141', got '%s'", cfg.Services.SubmissionURL)
+	if cfg.Services.SubmissionURL != "" {
+		t.Errorf("Expected test mode SubmissionURL='', got '%s'", cfg.Services.SubmissionURL)
 	}
 }
 

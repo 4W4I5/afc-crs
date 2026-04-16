@@ -347,8 +347,6 @@ func runPatchingStrategies(
 					// Pass through API credentials if they exist
 					fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 					fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
-					fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-					fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 					// Add any other environment variables needed by the Python script
 					fmt.Sprintf("WORKER_INDEX=%s", workerIndex),
 					fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
@@ -739,8 +737,6 @@ func runXPatchingStrategiesWithoutPOV(
 				// Pass through API credentials if they exist
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				// Add any other environment variables needed by the Python script
 				fmt.Sprintf("WORKER_INDEX=%s", workerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
@@ -969,8 +965,6 @@ func runXPatchSarifStrategies(
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				fmt.Sprintf("WORKER_INDEX=%s", workerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
@@ -1065,8 +1059,8 @@ func getPOVStatsFromSubmissionService(taskID, submissionEndpoint string) (int, i
 	req.Header.Set("Content-Type", "application/json")
 
 	// Get API credentials from environment
-	apiKeyID := os.Getenv("COMPETITION_API_KEY_ID")
-	apiToken := os.Getenv("COMPETITION_API_KEY_TOKEN")
+	apiKeyID := os.Getenv("CRS_KEY_ID")
+	apiToken := os.Getenv("CRS_KEY_TOKEN")
 	if apiKeyID != "" && apiToken != "" {
 		req.SetBasicAuth(apiKeyID, apiToken)
 	}

@@ -55,7 +55,7 @@ func ExecuteFuzzingTask(params TaskExecutionParams) error {
 
 	// Handle LOCAL_TEST mode
 	if os.Getenv("LOCAL_TEST") != "" {
-		params.SubmissionEndpoint = "http://localhost:4141"
+		params.SubmissionEndpoint = ""
 		if isSubmissionServiceDisabled() {
 			params.SubmissionEndpoint = ""
 			log.Printf("Submission service disabled via CRS_DISABLE_SUBMISSION_SERVICE in LOCAL_TEST mode")

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"crs/internal/competition"
 	"crs/internal/models"
 
 	"github.com/google/uuid"
@@ -62,7 +61,7 @@ func TestSaveAllCrashesAsPOVsCreatesMetadataWhenEmpty(t *testing.T) {
 	assert.NotEmpty(t, files)
 }
 
-func TestGenerateCrashSignatureAndSubmitCompetitionPath(t *testing.T) {
+func TestGenerateCrashSignatureAndSubmitSkipsWhenSubmissionUnavailable(t *testing.T) {
 	var called bool
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,18 +94,17 @@ func TestGenerateCrashSignatureAndSubmitCompetitionPath(t *testing.T) {
 	}
 
 	params := POVSubmissionParams{
-		FuzzDir:           fuzzDir,
-		POVMetadataDir:    metaDir,
-		TaskDetail:        taskDetail,
-		Fuzzer:            "fuzzer",
-		Sanitizer:         "address",
-		Output:            "ERROR: AddressSanitizer: issue",
-		VulnSignature:     "sig",
-		CompetitionClient: competition.NewClient(server.URL, "user", "pass"),
+		FuzzDir:        fuzzDir,
+		POVMetadataDir: metaDir,
+		TaskDetail:     taskDetail,
+		Fuzzer:         "fuzzer",
+		Sanitizer:      "address",
+		Output:         "ERROR: AddressSanitizer: issue",
+		VulnSignature:  "sig",
 	}
 
 	require.NoError(t, GenerateCrashSignatureAndSubmit(params))
-	assert.True(t, called)
+	assert.False(t, called)
 }
 
 func TestGetValidPOVs(t *testing.T) {
@@ -125,8 +123,8 @@ func TestGetValidPOVs(t *testing.T) {
 }
 
 func TestGetPOVStatsFromSubmissionService(t *testing.T) {
-	t.Setenv("COMPETITION_API_KEY_ID", "id")
-	t.Setenv("COMPETITION_API_KEY_TOKEN", "token")
+	t.Setenv("CRS_KEY_ID", "id")
+	t.Setenv("CRS_KEY_TOKEN", "token")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()

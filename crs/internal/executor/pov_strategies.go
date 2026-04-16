@@ -445,8 +445,6 @@ func runBasicStrategies(fuzzer, taskDir, projectDir, fuzzDir, language string,
 				// Pass through API credentials if they exist
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				// Add any other environment variables needed by the Python script
 				fmt.Sprintf("WORKER_INDEX=%s", basicConfig.WorkerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", basicConfig.AnalysisServiceUrl),
@@ -817,8 +815,6 @@ func runAdvancedPOVStrategiesWithTimeout(
 				fmt.Sprintf("TASK_ID=%s", taskDetail.TaskID.String()),
 				fmt.Sprintf("CRS_KEY_ID=%s", os.Getenv("CRS_KEY_ID")),
 				fmt.Sprintf("CRS_KEY_TOKEN=%s", os.Getenv("CRS_KEY_TOKEN")),
-				fmt.Sprintf("COMPETITION_API_KEY_ID=%s", os.Getenv("COMPETITION_API_KEY_ID")),
-				fmt.Sprintf("COMPETITION_API_KEY_TOKEN=%s", os.Getenv("COMPETITION_API_KEY_TOKEN")),
 				fmt.Sprintf("WORKER_INDEX=%s", workerIndex),
 				fmt.Sprintf("ANALYSIS_SERVICE_URL=%s", analysisServiceUrl),
 				"PYTHONUNBUFFERED=1",
