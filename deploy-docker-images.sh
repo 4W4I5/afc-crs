@@ -19,9 +19,3 @@ docker push ghcr.io/parasol-aser/crs-webapp:latest
 docker build -f Dockerfile.worker -t crs-worker:latest .
 docker tag crs-worker:latest ghcr.io/parasol-aser/crs-worker:latest
 docker push ghcr.io/parasol-aser/crs-worker:latest
-
-cd ../competition-api
-
-docker build -f Dockerfile.sub -t crs-sub:latest .
-docker tag crs-sub:latest ghcr.io/parasol-aser/crs-sub:latest
-docker push ghcr.io/parasol-aser/crs-sub:latest

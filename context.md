@@ -46,7 +46,6 @@
 │   │   └── callpath/           # 调用路径分析
 │   └── internal/               # 分析引擎
 ├── task_builder/                # 任务生成工具
-├── competition-api/             # 比赛 API 客户端
 └── aks-cluster-deploy/         # Azure K8s 部署
 ```
 
@@ -165,8 +164,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=...
 2. **任务分发**: Server → Workers
 3. **静态分析**: Worker → Static Analysis Service
 4. **策略执行**: Worker → Python Strategies
-5. **结果上报**: Worker → Competition API
-6. **监控**: OpenTelemetry 采集
+5. **监控**: OpenTelemetry 采集
 
 ---
 
