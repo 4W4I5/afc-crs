@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,59 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseGeneratedFuzzerResultJSONSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "generated_fuzzer.cc")
+	binaryPath := filepath.Join(tmpDir, "generated_fuzzer")
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("int main() { return 0; }"), 0o644))
+	require.NoError(t, os.WriteFile(binaryPath, []byte("bin"), 0o755))
+
+	payload, err := json.Marshal(generatedFuzzerPayload{
+		Status:     "success",
+		SourcePath: srcPath,
+		BinaryPath: binaryPath,
+	})
+	require.NoError(t, err)
+
+	output := "generator log\nGEN_FUZZER_JSON:" + string(payload) + "\n"
+	gotSrc, gotBinary, parseErr := parseGeneratedFuzzerResult(output)
+	require.NoError(t, parseErr)
+	assert.Equal(t, srcPath, gotSrc)
+	assert.Equal(t, binaryPath, gotBinary)
+}
+
+func TestParseGeneratedFuzzerResultJSONError(t *testing.T) {
+	payload, err := json.Marshal(generatedFuzzerPayload{
+		Status:      "error",
+		Reason:      "no_existing_fuzzers",
+		Message:     "No existing fuzzers found",
+		Diagnostics: "checked main_repo and oss-fuzz",
+	})
+	require.NoError(t, err)
+
+	output := "GEN_FUZZER_JSON:" + string(payload)
+	_, _, parseErr := parseGeneratedFuzzerResult(output)
+	require.Error(t, parseErr)
+	assert.ErrorContains(t, parseErr, "no_existing_fuzzers")
+	assert.ErrorContains(t, parseErr, "No existing fuzzers found")
+}
+
+func TestParseGeneratedFuzzerResultLegacyFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "legacy_fuzzer.cc")
+	binaryPath := filepath.Join(tmpDir, "legacy_fuzzer")
+
+	require.NoError(t, os.WriteFile(srcPath, []byte("int main() { return 0; }"), 0o644))
+	require.NoError(t, os.WriteFile(binaryPath, []byte("bin"), 0o755))
+
+	output := "some log\n" + srcPath + "\n" + binaryPath + "\n"
+	gotSrc, gotBinary, parseErr := parseGeneratedFuzzerResult(output)
+	require.NoError(t, parseErr)
+	assert.Equal(t, srcPath, gotSrc)
+	assert.Equal(t, binaryPath, gotBinary)
+}
 
 func TestBaseServiceSetters(t *testing.T) {
 	b := &baseService{workDir: "/tmp/work"}

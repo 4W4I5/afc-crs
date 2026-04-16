@@ -443,31 +443,47 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 	}
 
 	if *myFuzzer == UNHARNESSED && sanitizer != "coverage" {
-		log.Printf("Handling unharnessed task: %s", *myFuzzer)
-		cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir)
-
-		newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
-			taskDir,
-			taskDetail.Focus,
-			sanitizerDir,
-			taskDetail.ProjectName,
-			sanitizer,
-		)
-		if err != nil {
-			log.Printf("Failed to generate fuzzer: %v", err)
+		if !isDeltaTask(taskDetail) {
+			log.Printf(
+				"Skipping UNHARNESSED generation for non-delta task %s (type=%s)",
+				taskDetail.TaskID,
+				taskDetail.Type,
+			)
 		} else {
+			if err := ensureDeltaDiffReady(taskDir); err != nil {
+				return fmt.Errorf("delta UNHARNESSED generation precheck failed: %w", err)
+			}
+
+			log.Printf("Handling delta unharnessed task: %s", *myFuzzer)
+			if err := cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir); err != nil {
+				return fmt.Errorf("failed to prepare OSS-Fuzz/main repo for unharnessed generation: %w", err)
+			}
+
+			newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
+				taskDir,
+				taskDetail.Focus,
+				sanitizerDir,
+				taskDetail.ProjectName,
+				sanitizer,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to generate delta unharnessed fuzzer: %w", err)
+			}
+
 			s.unharnessedFuzzerSrc.Store(taskDetail.TaskID.String(), newFuzzerSrcPath)
 			log.Printf("New fuzzer source: %s", newFuzzerSrcPath)
 
 			*myFuzzer = newFuzzerPath
 			log.Printf("New fuzzer generated: %s", *myFuzzer)
+			return nil
 		}
+	}
+
+	// For both Java and C tasks on worker
+	if true {
+		build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
 	} else {
-		// For both Java and C tasks on worker
-		if true {
-			build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
-		} else {
-			workDir := filepath.Join(taskDir, "fuzz-tooling", "build", "work", fmt.Sprintf("%s-%s", taskDetail.ProjectName, sanitizer))
+		workDir := filepath.Join(taskDir, "fuzz-tooling", "build", "work", fmt.Sprintf("%s-%s", taskDetail.ProjectName, sanitizer))
 
 			cmdArgs := []string{
 				"run",
@@ -496,11 +512,10 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 			log.Printf("Running Docker build for sanitizer=%s, project=%s\nCommand: %v",
 				sanitizer, taskDetail.ProjectName, buildCmd.Args)
 
-			if err := buildCmd.Run(); err != nil {
-				log.Printf("Build fuzzer output:\n%s", buildOutput.String())
-				return fmt.Errorf("failed to build fuzzers with sanitizer=%s: %v\nOutput: %s",
-					sanitizer, err, buildOutput.String())
-			}
+		if err := buildCmd.Run(); err != nil {
+			log.Printf("Build fuzzer output:\n%s", buildOutput.String())
+			return fmt.Errorf("failed to build fuzzers with sanitizer=%s: %v\nOutput: %s",
+				sanitizer, err, buildOutput.String())
 		}
 	}
 	return nil

@@ -117,6 +117,9 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 			log.Printf("No fuzzers found in %s for sanitizer %s. Building...", sanitizerDir, sanitizer)
 			if err := params.FuzzerBuilder(params.MyFuzzer, params.TaskDir, params.ProjectDir, sanitizerDir, sanitizer, cfg.Language, params.TaskDetail); err != nil {
 				log.Printf("Error building fuzzers for sanitizer %s: %v", sanitizer, err)
+				if *params.MyFuzzer == "UNHARNESSED" && params.TaskDetail.Type == models.TaskTypeDelta {
+					return nil, nil, err
+				}
 			}
 		} else {
 			log.Printf("Found %d fuzzers in %s. Skipping build.", len(fuzzers), sanitizerDir)

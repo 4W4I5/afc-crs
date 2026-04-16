@@ -168,12 +168,22 @@ func (s *WebCRSService) SubmitTask(task models.Task) error {
 
 		// Process task asynchronously
 		go func(td models.TaskDetail) {
-			// TODO: for unharnessed tasks, set fuzzer to "UNHARNESSED" and send to a worker directly
-			// Worker will try to synthesize a harness
-			if !taskDetail.HarnessesIncluded {
+			if !td.HarnessesIncluded && isDeltaTask(td) {
+				log.Printf("Task %s is delta and has no harnesses; dispatching UNHARNESSED generation flow", td.TaskID)
 				allFuzzers := []string{UNHARNESSED}
-				s.distributeFuzzers(allFuzzers, taskDetail, task)
-			} else if err := s.processTask("", td, task); err != nil {
+				s.distributeFuzzers(allFuzzers, td, task)
+				return
+			}
+
+			if !td.HarnessesIncluded {
+				log.Printf(
+					"Task %s has no harnesses but type=%s; unharnessed auto-generation is disabled outside delta mode",
+					td.TaskID,
+					td.Type,
+				)
+			}
+
+			if err := s.processTask("", td, task); err != nil {
 				log.Printf("Error processing task %s: %v", td.TaskID, err)
 
 				// Update task state

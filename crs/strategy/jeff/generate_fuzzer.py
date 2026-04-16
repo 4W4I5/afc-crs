@@ -116,6 +116,65 @@ def log_time(log_file, start_time, end_time, function_name, description):
     duration = end_time - start_time
     log_message(log_file, f"{description}: {duration:.2f} seconds")
 
+
+GENERATOR_PAYLOAD_PREFIX = "GEN_FUZZER_JSON:"
+
+
+def emit_generator_payload(payload: Dict[str, Any]) -> None:
+    """Emit a machine-readable payload for the Go caller."""
+    print(f"{GENERATOR_PAYLOAD_PREFIX}{json.dumps(payload, sort_keys=True)}")
+
+
+def emit_generator_success(
+    source_path: str,
+    binary_path: str,
+    model: str,
+    build_script_path: str,
+    output_format: str,
+    log_file: str,
+) -> None:
+    source_abs = os.path.abspath(source_path)
+    binary_abs = os.path.abspath(binary_path)
+    if output_format == "json":
+        emit_generator_payload(
+            {
+                "status": "success",
+                "source_path": source_abs,
+                "binary_path": binary_abs,
+                "build_script_path": os.path.abspath(build_script_path),
+                "model": model,
+                "log_file": log_file,
+            }
+        )
+        return
+
+    print(source_abs)
+    print(binary_abs)
+
+
+def emit_generator_failure(
+    reason: str,
+    message: str,
+    output_format: str,
+    diagnostics: str = "",
+    log_file: str = "",
+) -> None:
+    if output_format == "json":
+        emit_generator_payload(
+            {
+                "status": "error",
+                "reason": reason,
+                "message": message,
+                "diagnostics": diagnostics,
+                "log_file": log_file,
+            }
+        )
+        return
+
+    print(message, file=sys.stderr)
+    if diagnostics:
+        print(diagnostics, file=sys.stderr)
+
 # ----------------------------------------------------------------------
 def parse_diff_get_changed_files(diff_path):
     """Return a list of source files touched by the diff/patch."""
@@ -1022,20 +1081,38 @@ def main():
     ap.add_argument('--sanitizer_dir', required=True)
     ap.add_argument('--project_name',  required=True)
     ap.add_argument('--sanitizer',  required=True)
+    ap.add_argument('--output-format', choices=['legacy', 'json'], default='legacy')
+    ap.add_argument('--source-mode', choices=['diff', 'full'], default='diff')
+    ap.add_argument('--diff-path', default='')
 
     args = ap.parse_args()
     project_name = args.project_name
     sanitizer = args.sanitizer
     out_dir = args.sanitizer_dir
+    output_format = args.output_format
     focus_sanitizer = f"{args.focus}-{sanitizer}"
     project_src_dir = os.path.join(args.task_dir, focus_sanitizer)
 
     log_file = setup_logging(project_name)
     oss_fuzz_dir = os.path.join(args.task_dir, "oss-fuzz")
     if not os.path.exists(oss_fuzz_dir):
-        subprocess.run(["git", "clone", "--depth", "1",
-                        "https://github.com/google/oss-fuzz", oss_fuzz_dir],
-                       check=True)
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "https://github.com/google/oss-fuzz", oss_fuzz_dir],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as e:
+            err = f"failed to clone oss-fuzz into {oss_fuzz_dir}: {str(e)}"
+            log_message(log_file, err)
+            emit_generator_failure(
+                reason="ossfuzz_clone_failed",
+                message=err,
+                output_format=output_format,
+                log_file=log_file,
+            )
+            sys.exit(1)
 
     oss_fuzz_project_dir = os.path.join(oss_fuzz_dir, "projects", args.project_name)
     fuzz_tooling_project_dir = oss_fuzz_project_dir.replace("oss-fuzz", "fuzz-tooling")
@@ -1062,26 +1139,44 @@ def main():
                 time.sleep(yaml_attempt_delay)
             else:
                 log_message(log_file, f"Failed to load {project_yaml} after {max_yaml_attempts} attempts.")
-                # Propagate the error if all attempts fail
-                raise 
+                break
         except Exception as e:
             log_message(log_file, f"Attempt {attempt + 1}/{max_yaml_attempts}: Error loading {project_yaml}: {e}. Waiting {yaml_attempt_delay}s...")
             if attempt < max_yaml_attempts - 1:
                 time.sleep(yaml_attempt_delay)
             else:
                 log_message(log_file, f"Failed to load {project_yaml} due to error: {e} after {max_yaml_attempts} attempts.")
-                raise
+                break
 
     if cfg is None:
         log_message(log_file, f"Critical: Could not load {project_yaml} after all attempts. Exiting.")
-        # Ensure the script exits if cfg couldn't be loaded, mirroring the original behavior of an unhandled exception
+        emit_generator_failure(
+            reason="project_config_unavailable",
+            message=f"failed to load project config: {project_yaml}",
+            output_format=output_format,
+            log_file=log_file,
+        )
+        sys.exit(1)
+
+    main_repo_url = ""
+    if isinstance(cfg, dict):
+        main_repo_url = str(cfg.get("main_repo", "")).strip()
+    if not main_repo_url:
+        err = f"project config missing main_repo for {project_name}"
+        log_message(log_file, err)
+        emit_generator_failure(
+            reason="missing_main_repo",
+            message=err,
+            output_format=output_format,
+            log_file=log_file,
+        )
         sys.exit(1)
 
 
     main_repo_dir = os.path.join(args.task_dir, "main_repo")
     if not os.path.exists(main_repo_dir) or not os.listdir(main_repo_dir): # Check if already cloned and populated
         try:
-            log_message(log_file, f"Attempting to clone main_repo from {cfg['main_repo']} into {main_repo_dir}")
+            log_message(log_file, f"Attempting to clone main_repo from {main_repo_url} into {main_repo_dir}")
             # If main_repo_dir exists but is empty, git clone will use it. If it's non-empty, git clone fails.
             # Ensure it's clean if it exists but is empty, or remove if clone fails into it.
             if os.path.exists(main_repo_dir) and not os.listdir(main_repo_dir):
@@ -1095,7 +1190,7 @@ def main():
             # The command itself will create main_repo_dir if it doesn't exist.
 
             git_clone_result = subprocess.run(
-                ["git", "clone", "--depth", "1", cfg["main_repo"], main_repo_dir],
+                ["git", "clone", "--depth", "1", main_repo_url, main_repo_dir],
                 check=False, capture_output=True, text=True # check=False to handle error manually
             )
             if git_clone_result.returncode == 0:
@@ -1134,8 +1229,14 @@ def main():
     existing_fuzzers = find_fuzzers(oss_fuzz_project_dir)
     existing_fuzzers += find_fuzzers(main_repo_dir)
     if not existing_fuzzers:
-        #TODO maintain a database of fuzzers 
-        print("No existing fuzzers found", file=sys.stderr)
+        err = "No existing fuzzers found"
+        log_message(log_file, err)
+        emit_generator_failure(
+            reason="no_existing_fuzzers",
+            message=err,
+            output_format=output_format,
+            log_file=log_file,
+        )
         sys.exit(1)
 
     first_existing_fuzzer_path = existing_fuzzers[0]
@@ -1182,20 +1283,24 @@ def main():
     # analyze diff for delta scan
     # ------------------------------------------------------------------
     diff_content = ""
-    diff_path = os.path.join(args.task_dir, "diff", "ref.diff")
-    if os.path.exists(diff_path):
-        # read diff_content
-        try:
-            with open(diff_path, "r") as f:
-                diff_content = f.read()
-            log_message(log_file, f"Read diff from {diff_path}, len(diff_content): {len(diff_content)}")
+    diff_path = args.diff_path or os.path.join(args.task_dir, "diff", "ref.diff")
+    if args.source_mode == "diff":
+        if os.path.exists(diff_path):
+            try:
+                with open(diff_path, "r") as f:
+                    diff_content = f.read()
+                log_message(log_file, f"Read diff from {diff_path}, len(diff_content): {len(diff_content)}")
 
-            # If the diff is very large, process it to make it more manageable
-            if len(diff_content) > 50000:  # More than 50KB
-                log_message(log_file, "Diff is large, processing to extract relevant parts...")
-                diff_content = process_large_diff(diff_content, log_file)
-        except Exception as e:
-            log_message(log_file, f"Error reading diff file: {str(e)}")
+                # If the diff is very large, process it to make it more manageable
+                if len(diff_content) > 50000:  # More than 50KB
+                    log_message(log_file, "Diff is large, processing to extract relevant parts...")
+                    diff_content = process_large_diff(diff_content, log_file)
+            except Exception as e:
+                log_message(log_file, f"Error reading diff file: {str(e)}")
+        else:
+            log_message(log_file, f"Diff mode requested but diff not found at {diff_path}; falling back to full source prompt")
+    else:
+        log_message(log_file, "Full source mode requested; skipping diff analysis")
 
     # construct prompt to generate a new fuzzer
     if diff_content:
@@ -1213,7 +1318,6 @@ def main():
         for attempt in range(1, MAX_ATTEMPTS_PER_MODEL + 1):
             log_message(log_file, f"Trying {model_name_x} to generate fuzzers, attempt {attempt}/{MAX_ATTEMPTS_PER_MODEL}")
             response, success = call_llm(log_file, messages, model_name_x)
-            print(f"response:{response}")
             if success and response:
                 source_code = extract_fuzzer_source_from_response(response) 
                 with open(new_fuzzer_src_path, "w", encoding="utf-8") as f:
@@ -1310,8 +1414,14 @@ def main():
                         #copy to taskdir
                         task_dir_build_sh_path = os.path.join(args.task_dir, f"build-{sanitizer}.sh")
                         shutil.copy2(host_temp_modified_build_sh_path, task_dir_build_sh_path)
-                        print(os.path.abspath(new_fuzzer_src_path))   # <-- stdout consumed by Go
-                        print(os.path.abspath(new_fuzzer_path))   # <-- stdout consumed by Go
+                        emit_generator_success(
+                            source_path=new_fuzzer_src_path,
+                            binary_path=new_fuzzer_path,
+                            model=model_name_x,
+                            build_script_path=task_dir_build_sh_path,
+                            output_format=output_format,
+                            log_file=log_file,
+                        )
                         sys.exit(0)
                     else:
                         log_message(log_file, f"Build was successful but new_fuzzer_path {new_fuzzer_path} does not exist!")  
@@ -1320,7 +1430,13 @@ def main():
                 build_error += f"\n{model_name_x} attempt {attempt} LLM call failed."
 
     log_message(log_file, f"All attempts failed. Last build error: {build_error if build_error else 'No specific build error logged, LLM or other issue.'}")
-    print("Failed to generate and build a valid fuzzer after all attempts.", file=sys.stderr)
+    emit_generator_failure(
+        reason="exhausted_attempts",
+        message="Failed to generate and build a valid fuzzer after all attempts.",
+        output_format=output_format,
+        diagnostics=build_error[-2000:] if build_error else "",
+        log_file=log_file,
+    )
     sys.exit(1)
 
 if __name__ == "__main__":

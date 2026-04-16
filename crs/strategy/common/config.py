@@ -47,6 +47,7 @@ class StrategyConfig:
     # Strategy-specific flags
     use_control_flow: bool = True
     unharnessed: bool = False
+    input_generator: str = "python_executor"
 
     # Logging configuration
     log_dir: str = "./logs"
@@ -114,3 +115,4 @@ class StrategyConfig:
         print(f"DEBUG: patch_success_dir = {self.patch_success_dir}")
         print(f"DEBUG: max_iterations = {self.max_iterations}")
         print(f"DEBUG: models = {self.models}")
+        print(f"DEBUG: input_generator = {self.input_generator}")

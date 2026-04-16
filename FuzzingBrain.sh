@@ -21,6 +21,42 @@ print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Prepare workspace repo before local CRS build.
+# This is especially important for projects like Skia that rely on
+# tools/git-sync-deps to populate third_party/externals.
+prepare_repo_for_build() {
+    local repo_dir="$1"
+    local target_commit="$2"
+
+    if [ ! -d "$repo_dir/.git" ]; then
+        print_warn "Skipping repo preparation: not a git repo ($repo_dir)"
+        return 0
+    fi
+
+    if [ -n "$target_commit" ]; then
+        print_info "Checking out target commit: $target_commit"
+        if ! git -C "$repo_dir" checkout --quiet "$target_commit"; then
+            print_error "Failed to checkout commit $target_commit in $repo_dir"
+            return 1
+        fi
+    fi
+
+    if [ -f "$repo_dir/tools/git-sync-deps" ]; then
+        print_info "Running dependency sync: tools/git-sync-deps"
+        if ! (
+            cd "$repo_dir" && \
+            GIT_SYNC_DEPS_SKIP_EMSDK=1 \
+            GIT_SYNC_DEPS_SHALLOW_CLONE=1 \
+            GIT_SYNC_DEPS_QUIET=0 \
+            python3 tools/git-sync-deps
+        ); then
+            print_warn "tools/git-sync-deps failed; build may miss third_party externals"
+        fi
+    fi
+
+    return 0
+}
+
 # Check if argument looks like a git URL
 is_git_url() {
     [[ "$1" =~ ^git@ ]] || [[ "$1" =~ ^https?://.*\.git$ ]] || [[ "$1" =~ ^https?://github\.com/ ]] || [[ "$1" =~ ^https?://gitlab\.com/ ]]
@@ -471,6 +507,10 @@ if is_project_name "$TARGET"; then
     print_info "Workspace: $WORKSPACE"
     echo ""
 
+    if ! prepare_repo_for_build "$WORKSPACE/repo" ""; then
+        exit 1
+    fi
+
     # Check environment before running
     check_environment
 
@@ -587,6 +627,12 @@ elif is_git_url "$TARGET"; then
         fi
     fi
 
+    # Ensure workspace repo is at delta commit (if provided) and dependencies are synced.
+    target_commit="${DELTA_COMMIT:-}"
+    if ! prepare_repo_for_build "$WORKSPACE/repo" "$target_commit"; then
+        exit 1
+    fi
+
     print_info "Workspace created successfully: $WORKSPACE"
     echo ""
 
@@ -603,6 +649,13 @@ else
     if [ ! -d "$TARGET" ]; then
         print_error "Directory does not exist: $TARGET"
         exit 1
+    fi
+
+    # If TARGET follows workspace layout, run the same repo preparation.
+    if [ -d "$TARGET/repo" ]; then
+        if ! prepare_repo_for_build "$TARGET/repo" ""; then
+            exit 1
+        fi
     fi
 
     # Check environment before running

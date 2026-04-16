@@ -1,6 +1,8 @@
 #!/bin/bash
 
-mkdir -p logs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="${CRS_LOG_DIR:-$SCRIPT_DIR/logs}"
+mkdir -p "$LOG_DIR"
 
 # Setup Python virtual environment
 VENV_DIR="/tmp/crs_venv"
@@ -39,7 +41,6 @@ if ! "$VENV_DIR/bin/python3" -m pip install -q --upgrade pip setuptools wheel; t
     exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/strategy/requirements.txt" ]; then
     if ! "$VENV_DIR/bin/python3" -m pip install -q -r "$SCRIPT_DIR/strategy/requirements.txt"; then
         echo "ERROR: Failed to install strategy Python dependencies"
@@ -120,9 +121,10 @@ fi
 
 # Set log file name
 if [ -n "$LOG_NAME" ]; then
-    LOG_FILE="logs/${LOG_NAME}.log"
+    SAFE_LOG_NAME="$(basename "$LOG_NAME")"
+    LOG_FILE="$LOG_DIR/${SAFE_LOG_NAME}.log"
 else
-    LOG_FILE="logs/${DATE}.log"
+    LOG_FILE="$LOG_DIR/${DATE}.log"
 fi
 
 # Check if the dataset path exists

@@ -26,6 +26,7 @@ from common.utils import (
     cleanup_seed_corpus,
     truncate_output,
 )
+from common.input_generators import build_input_generator
 
 # Constants
 DETECT_TIMEOUT_CRASH_SENTINEL = "detect_timeout_crash"
@@ -152,11 +153,10 @@ Please write a Python script that generates the blob file as 'x.bin'.
 
     def generate_blobs(self, code: str, xbin_dir: str) -> List[str]:
         """
-        Execute LLM-generated Python code to create blob files
+        Execute LLM-generated code using the configured input generator
 
-        Default implementation:
-        - Executes Python code in a subprocess
-        - Returns ["/path/to/x.bin"] (1 blob)
+        Default implementation uses the input generator configured in StrategyConfig.
+        The default generator executes Python code and returns ["/path/to/x.bin"].
 
         AS0 strategy overrides to generate 5 blobs (x1.bin - x5.bin)
 
@@ -167,35 +167,12 @@ Please write a Python script that generates the blob file as 'x.bin'.
         Returns:
             List of blob file paths
         """
-        # Save code to temp file
-        code_file = os.path.join(xbin_dir, "generate_blob.py")
-        with open(code_file, "w") as f:
-            f.write(code)
-
-        # Execute code
         try:
-            result = subprocess.run(
-                [sys.executable, code_file],
-                cwd=xbin_dir,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Code execution failed: {result.stderr}")
-
-            # Check for x.bin
-            blob_path = os.path.join(xbin_dir, "x.bin")
-            if not os.path.exists(blob_path):
-                raise RuntimeError("Code did not create x.bin")
-
-            return [blob_path]
-
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Code execution timed out")
+            generator_name = getattr(self.config, "input_generator", "python_executor")
+            generator = build_input_generator(generator_name)
+            return generator.generate(code, xbin_dir)
         except Exception as e:
-            raise RuntimeError(f"Code execution error: {str(e)}")
+            raise RuntimeError(f"Code execution error ({generator_name}): {str(e)}")
 
     # ========== Tool methods (can be overridden if needed) ==========
 
