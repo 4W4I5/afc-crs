@@ -42,15 +42,51 @@ prepare_repo_for_build() {
     fi
 
     if [ -f "$repo_dir/tools/git-sync-deps" ]; then
-        print_info "Running dependency sync: tools/git-sync-deps"
-        if ! (
-            cd "$repo_dir" && \
-            GIT_SYNC_DEPS_SKIP_EMSDK=1 \
-            GIT_SYNC_DEPS_SHALLOW_CLONE=1 \
-            GIT_SYNC_DEPS_QUIET=0 \
-            python3 tools/git-sync-deps
-        ); then
-            print_warn "tools/git-sync-deps failed; build may miss third_party externals"
+        local max_sync_attempts=3
+        local sync_attempt=1
+        local sync_ok=false
+        local sync_output=""
+        local sync_status=0
+        local empty_repo_count=0
+
+        while [ "$sync_attempt" -le "$max_sync_attempts" ]; do
+            print_info "Running dependency sync: tools/git-sync-deps (attempt $sync_attempt/$max_sync_attempts)"
+
+            sync_output="$({
+                cd "$repo_dir" && \
+                GIT_SYNC_DEPS_SKIP_EMSDK=1 \
+                GIT_SYNC_DEPS_SHALLOW_CLONE=1 \
+                GIT_SYNC_DEPS_QUIET=0 \
+                python3 tools/git-sync-deps
+            } 2>&1)"
+            sync_status=$?
+            printf "%s\n" "$sync_output"
+
+            empty_repo_count=$(printf "%s\n" "$sync_output" | grep -c "You appear to have cloned an empty repository" || true)
+            if [ "$sync_status" -eq 0 ] && [ "$empty_repo_count" -eq 0 ]; then
+                sync_ok=true
+                print_info "Dependency sync completed successfully"
+                break
+            fi
+
+            if [ "$empty_repo_count" -gt 0 ]; then
+                print_warn "Dependency sync produced empty-repository warnings ($empty_repo_count)"
+            fi
+            if [ "$sync_status" -ne 0 ]; then
+                print_warn "Dependency sync exited with code $sync_status"
+            fi
+
+            if [ "$sync_attempt" -lt "$max_sync_attempts" ]; then
+                print_warn "Cleaning dependency cache and retrying sync"
+                rm -rf "$repo_dir/third_party/externals"
+            fi
+
+            sync_attempt=$((sync_attempt + 1))
+        done
+
+        if [ "$sync_ok" != true ]; then
+            print_error "Dependency sync failed after $max_sync_attempts attempts; aborting run"
+            return 1
         fi
     fi
 
@@ -404,14 +440,16 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --in-place      Run directly without copying workspace"
+    echo "  --with-oss-fuzz Enable OSS-Fuzz project clone/bootstrap for new workspace"
     echo "  --project NAME  Specify OSS-Fuzz project name (if different from repo name)"
     echo "  -b COMMIT       Base commit ID (for delta scan)"
     echo "  -d COMMIT       Delta commit ID (for delta scan, requires -b)"
     echo ""
     echo "Examples:"
     echo "  $0 git@github.com:libexpat/libexpat.git                                # Full scan from git"
+    echo "  $0 --with-oss-fuzz git@github.com:libexpat/libexpat.git                # Full scan + OSS-Fuzz bootstrap"
     echo "  $0 -b abc123 -d def456 git@github.com:libexpat/libexpat.git           # Delta scan with base and delta commits"
-    echo "  $0 --project expat git@github.com:libexpat/libexpat.git               # Specify oss-fuzz project"
+    echo "  $0 --with-oss-fuzz --project expat git@github.com:libexpat/libexpat.git # Specify OSS-Fuzz project"
     echo "  $0 /path/to/workspace                                                  # Use existing workspace"
     echo "  $0 --in-place /path/to/workspace                                       # Run in-place"
     echo "  $0 libexpat                                                            # Continue fuzzing existing project"
@@ -420,6 +458,7 @@ show_usage() {
 
 # Parse arguments
 IN_PLACE=false
+WITH_OSS_FUZZ=false
 OSS_FUZZ_PROJECT=""
 BASE_COMMIT=""
 DELTA_COMMIT=""
@@ -429,6 +468,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --in-place)
             IN_PLACE=true
+            shift
+            ;;
+        --with-oss-fuzz)
+            WITH_OSS_FUZZ=true
             shift
             ;;
         --project)
@@ -558,7 +601,7 @@ elif is_git_url "$TARGET"; then
     # Check if fuzz-tooling already exists
     if [ -d "$WORKSPACE/fuzz-tooling/projects" ] && [ -n "$(ls -A "$WORKSPACE/fuzz-tooling/projects" 2>/dev/null)" ]; then
         print_info "Reusing existing fuzz-tooling from workspace"
-    else
+    elif [ "$WITH_OSS_FUZZ" = true ]; then
         # Clone oss-fuzz to temp directory
         OSSFUZZ_TMP="/tmp/oss-fuzz-$$"
         print_info "Cloning oss-fuzz (this may take a moment)..."
@@ -593,6 +636,11 @@ elif is_git_url "$TARGET"; then
             rm -rf "$OSSFUZZ_TMP"
             print_info "OSS-Fuzz project copied to workspace"
         fi
+    else
+        if [ -n "$OSS_FUZZ_PROJECT" ]; then
+            print_warn "Ignoring --project because --with-oss-fuzz was not provided"
+        fi
+        print_info "Skipping OSS-Fuzz clone/bootstrap (enable with --with-oss-fuzz)"
     fi
 
     # Handle delta scan (generate ref.diff from base and delta commits)
