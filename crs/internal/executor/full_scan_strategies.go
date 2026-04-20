@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -49,22 +50,12 @@ func runFullScanStrategy(fuzzer, taskDir, projectDir, fuzzDir, language string,
 	log.Printf("Metadata: %v", taskDetail.Metadata)
 	log.Printf("=========================================")
 
-	// TODO: Implement full scan workflow
-	// Step 1: Get reachable functions from Analysis Service
-	// Step 2: Identify suspicious points using LLM
-	// Step 3: Store suspicious points in PostgreSQL
-	// Step 4: Run Python strategy
-
-	// For now, run placeholder strategy
-	log.Printf("Running placeholder full scan strategy...")
-	povSuccess := runFullScanPlaceholderStrategy(fuzzer, taskDir, projectDir, fuzzDir,
+	return runFullScanStrategies(fuzzer, taskDir, projectDir, fuzzDir,
 		language, taskDetail, task, fullScanConfig)
-
-	return povSuccess
 }
 
-// runFullScanPlaceholderStrategy runs the placeholder Python strategy
-func runFullScanPlaceholderStrategy(fuzzer, taskDir, projectDir, fuzzDir, language string,
+// runFullScanStrategies discovers and executes configured full-scan strategies.
+func runFullScanStrategies(fuzzer, taskDir, projectDir, fuzzDir, language string,
 	taskDetail models.TaskDetail, task models.Task, fullScanConfig FullScanStrategyConfig) bool {
 
 	strategyConfig := fullScanConfig.StrategyConfig
@@ -73,42 +64,77 @@ func runFullScanPlaceholderStrategy(fuzzer, taskDir, projectDir, fuzzDir, langua
 		strategyConfig = &config.StrategyConfig{
 			BaseDir:        "/app/strategy",
 			NewStrategyDir: "jeff",
+			POV: config.POVStrategyConfig{
+				AdvancedFullPattern: "as*_full.py",
+			},
 		}
 	}
 
-	// Use the full scan strategy file
 	strategyDir := strategyConfig.GetStrategyDir()
-	strategyFile := "as0_full.py"
-	strategyPath := strategyDir + "/" + strategyFile
-
-	// Check if strategy file exists
-	if _, err := os.Stat(strategyPath); os.IsNotExist(err) {
-		log.Printf("ERROR: Strategy file not found: %s", strategyPath)
-		log.Printf("Full scan strategy does not exist, failing immediately")
+	strategyFilePattern := strategyConfig.GetAdvancedStrategyPattern(string(models.TaskTypeFull))
+	strategyFiles, err := filepath.Glob(filepath.Join(strategyDir, strategyFilePattern))
+	if err != nil {
+		log.Printf("Failed to discover full scan strategy files with pattern %s: %v", strategyFilePattern, err)
 		return false
 	}
 
-	log.Printf("Running full scan strategy: %s", strategyPath)
+	if len(strategyFiles) == 0 {
+		log.Printf("No full scan strategy files found in %s with pattern %s", strategyDir, strategyFilePattern)
+		return false
+	}
 
-	// Run the Python strategy
-	povSuccess := runSingleFullScanStrategy(
-		strategyPath,
-		fuzzer,
-		projectDir,
-		taskDetail.ProjectName,
-		taskDetail.Focus,
-		language,
-		fullScanConfig.Model,
-		fullScanConfig.POVMetadataDir,
-		fullScanConfig.SubmissionEndpoint,
-		taskDetail.TaskID.String(),
-		fullScanConfig.WorkerIndex,
-	)
+	sort.Strings(strategyFiles)
+	var filteredStrategies []string
+	for _, strategyPath := range strategyFiles {
+		strategyName := filepath.Base(strategyPath)
+		if strategyConfig.ShouldRunAdvancedStrategy(strategyName) {
+			filteredStrategies = append(filteredStrategies, strategyPath)
+		} else {
+			log.Printf("Skipping full scan strategy %s (not selected)", strategyName)
+		}
+	}
+
+	if len(filteredStrategies) == 0 {
+		log.Printf("No full scan strategies to run after filtering (selected: %s)", strategyConfig.POV.SelectedAdvancedStrategy)
+		return false
+	}
+
+	log.Printf("Running %d full scan strategies: %v", len(filteredStrategies), filteredStrategies)
+
+	povSuccess := false
+	for _, strategyPath := range filteredStrategies {
+		log.Printf("Running full scan strategy: %s", strategyPath)
+
+		if _, err := os.Stat(strategyPath); os.IsNotExist(err) {
+			log.Printf("Strategy file disappeared before execution: %s", strategyPath)
+			continue
+		}
+
+		if runSingleFullScanStrategy(
+			strategyPath,
+			fuzzer,
+			projectDir,
+			taskDetail.ProjectName,
+			taskDetail.Focus,
+			language,
+			fullScanConfig.Model,
+			fullScanConfig.POVMetadataDir,
+			fullScanConfig.SubmissionEndpoint,
+			taskDetail.TaskID.String(),
+			fullScanConfig.WorkerIndex,
+		) {
+			povSuccess = true
+			log.Printf("✓ Full scan strategy succeeded: %s", filepath.Base(strategyPath))
+			break
+		}
+
+		log.Printf("✗ Full scan strategy did not find POV: %s", filepath.Base(strategyPath))
+	}
 
 	if povSuccess {
-		log.Printf("✓ Full scan placeholder strategy succeeded")
+		log.Printf("✓ Full scan strategy execution succeeded")
 	} else {
-		log.Printf("✗ Full scan placeholder strategy did not find POV")
+		log.Printf("✗ Full scan strategy execution did not find POV")
 	}
 
 	return povSuccess

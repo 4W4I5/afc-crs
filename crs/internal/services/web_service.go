@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"crs/internal/competition"
 	"crs/internal/config"
 	"crs/internal/models"
+	"crs/internal/utils/build"
 	"crs/internal/utils/environment"
 	"crs/internal/utils/fuzzer"
 	"crs/internal/utils/helpers"
@@ -25,23 +27,23 @@ import (
 
 // WebCRSService implements CRSService for web service mode (task scheduling and distribution)
 type WebCRSService struct {
-	cfg                    *config.Config
-	tasks                  map[string]*models.TaskDetail
-	tasksMutex             sync.RWMutex
-	workDir                string
-	competitionClient      *competition.Client
-	statusMutex            sync.RWMutex
-	status                 models.StatusTasksState
-	povMetadataDir         string
-	povMetadataDir0        string
+	cfg                     *config.Config
+	tasks                   map[string]*models.TaskDetail
+	tasksMutex              sync.RWMutex
+	workDir                 string
+	competitionClient       *competition.Client
+	statusMutex             sync.RWMutex
+	status                  models.StatusTasksState
+	povMetadataDir          string
+	povMetadataDir0         string
 	povAdvcancedMetadataDir string
-	patchWorkDir           string
-	submissionEndpoint     string
-	workerIndex            string
-	analysisServiceUrl     string
-	workerNodes            int
-	workerBasePort         int
-	model                  string
+	patchWorkDir            string
+	submissionEndpoint      string
+	workerIndex             string
+	analysisServiceUrl      string
+	workerNodes             int
+	workerBasePort          int
+	model                   string
 
 	// Fields for tracking historical task distribution
 	totalTasksDistributed int
@@ -170,9 +172,9 @@ func (s *WebCRSService) SubmitTask(task models.Task) error {
 		go func(td models.TaskDetail) {
 			//TODO: for unharnessed tasks, set fuzzer to "UNHARNESSED" and send to a worker directly
 			//Worker will try to synthesize a harness
-			if !taskDetail.HarnessesIncluded {
+			if !td.HarnessesIncluded {
 				allFuzzers := []string{UNHARNESSED}
-				s.distributeFuzzers(allFuzzers, taskDetail, task)
+				s.distributeFuzzers(allFuzzers, td, task)
 			} else if err := s.processTask("", td, task); err != nil {
 				log.Printf("Error processing task %s: %v", td.TaskID, err)
 
@@ -390,7 +392,7 @@ func (s *WebCRSService) processTask(myFuzzer string, taskDetail models.TaskDetai
 		DockerfileFullPath: dockerfileFullPath,
 		FuzzerDir:          fuzzerDir,
 		ProjectDir:         projectDir,
-		FuzzerBuilder:      nil, // Web service doesn't build locally
+		FuzzerBuilder:      s.buildFuzzersDocker,
 		FindFuzzers:        fuzzer.FindFuzzers,
 		SanitizerOverride:  s.cfg.Fuzzer.GetSanitizerList(), // Use config sanitizers if set
 	}
@@ -454,6 +456,35 @@ func (s *WebCRSService) processTask(myFuzzer string, taskDetail models.TaskDetai
 	s.status.Succeeded++
 	s.statusMutex.Unlock()
 
+	return nil
+}
+
+func (s *WebCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectDir, sanitizerDir string, sanitizer string, language string, taskDetail models.TaskDetail) error {
+	if *myFuzzer == UNHARNESSED && sanitizer != "coverage" {
+		return fmt.Errorf("unharnessed tasks must be distributed to workers before local build")
+	}
+
+	sanitizerProjectDir := fmt.Sprintf("%s-%s", projectDir, sanitizer)
+	if err := os.MkdirAll(sanitizerProjectDir, 0755); err != nil {
+		return fmt.Errorf("failed to create sanitizer project dir: %w", err)
+	}
+
+	cpCmd := exec.Command("cp", "-r", fmt.Sprintf("%s/.", projectDir), sanitizerProjectDir)
+	if err := cpCmd.Run(); err != nil {
+		return fmt.Errorf("failed to copy project files for sanitizer %s: %w", sanitizer, err)
+	}
+
+	output, err := build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
+	if err != nil {
+		if output != "" {
+			log.Printf("[Web BuildAFCFuzzers] Output:\n%s", output)
+		}
+		return fmt.Errorf("failed building fuzzers for sanitizer %s: %w", sanitizer, err)
+	}
+
+	if output != "" {
+		log.Printf("[Web BuildAFCFuzzers] Build completed for %s-%s", taskDetail.ProjectName, sanitizer)
+	}
 	return nil
 }
 

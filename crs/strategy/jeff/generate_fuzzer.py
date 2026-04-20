@@ -456,21 +456,23 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
             # For overloaded/rate limit errors, use exponential backoff
             if (is_auth_error or is_server_error or is_overloaded or is_rate_limited) and attempt < max_retries - 1:
                 fallback_model = get_fallback_model(current_model, tried_models_in_this_call)
-                log_message(log_file, f"{log_prefix}: Switching from {current_model} to fallback model {fallback_model} due to error.")
-                current_model = fallback_model
-                tried_models_in_this_call.add(current_model)
-                if current_model.startswith("gemini"):
-                    try:
-                        response = call_gemini_api(log_file, messages, current_model)
-                        return response
-                        
-                    except Exception as e:  
-                        error_str = str(e)
-                        log_message(log_file, f"Gemini Attempt {attempt+1}/{max_retries} failed with model {current_model}: {error_str}")
-                        continue
-                # Use a shorter, fixed delay when switching models before the next attempt
-                time.sleep(random.uniform(1, 3)) # Short random delay
-                continue # Skip normal backoff, immediately try the fallback model on the next attempt loop iteration
+                if fallback_model is not None:
+                    log_message(log_file, f"{log_prefix}: Switching from {current_model} to fallback model {fallback_model} due to error.")
+                    current_model = fallback_model
+                    tried_models_in_this_call.add(current_model)
+                    if current_model.startswith("gemini"):
+                        try:
+                            response = call_gemini_api(log_file, messages, current_model)
+                            return response
+                            
+                        except Exception as e:  
+                            error_str = str(e)
+                            log_message(log_file, f"Gemini Attempt {attempt+1}/{max_retries} failed with model {current_model}: {error_str}")
+                            continue
+                    # Use a shorter, fixed delay when switching models before the next attempt
+                    time.sleep(random.uniform(1, 3)) # Short random delay
+                    continue # Skip normal backoff, immediately try the fallback model on the next attempt loop iteration
+                log_message(log_file, f"{log_prefix}: No fallback model available after trying: {tried_models_in_this_call}")
             else:
                 log_message(log_file, f"{log_prefix}: Error occurred, but no fallback models left to try. Attempted: {tried_models_in_this_call}")
                 # Proceed to normal backoff/failure logic
@@ -930,6 +932,7 @@ def _try_fetch_sources_via_docker_build(log_file, task_dir, project_name, target
         
         env = os.environ.copy()
         log_message(log_file, f"Running Docker build command: {' '.join(docker_build_cmd)}")
+        build_timeout_seconds = 180
 
         try:
             result = subprocess.run(
@@ -938,7 +941,7 @@ def _try_fetch_sources_via_docker_build(log_file, task_dir, project_name, target
                 capture_output=True, # stdout and stderr will be bytes
                 text=False,          # Process as bytes to reduce overhead
                 check=False,
-                timeout=180 # Added timeout
+                timeout=build_timeout_seconds
             )
             
             # Decode output for logging, showing only the tail end to keep logs manageable

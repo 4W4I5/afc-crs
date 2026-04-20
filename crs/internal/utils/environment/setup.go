@@ -39,16 +39,16 @@ type FuzzerBuilder func(myFuzzer *string, taskDir, projectDir, sanitizerDir stri
 
 // PrepareEnvironmentParams contains parameters for PrepareEnvironment
 type PrepareEnvironmentParams struct {
-	MyFuzzer          *string
-	TaskDir           string
-	TaskDetail        models.TaskDetail
-	DockerfilePath    string
+	MyFuzzer           *string
+	TaskDir            string
+	TaskDetail         models.TaskDetail
+	DockerfilePath     string
 	DockerfileFullPath string
-	FuzzerDir         string
-	ProjectDir        string
-	FuzzerBuilder     FuzzerBuilder
-	FindFuzzers       func(string) ([]string, error)
-	SanitizerOverride []string // Optional: override sanitizers from config
+	FuzzerDir          string
+	ProjectDir         string
+	FuzzerBuilder      FuzzerBuilder
+	FindFuzzers        func(string) ([]string, error)
+	SanitizerOverride  []string // Optional: override sanitizers from config
 }
 
 // PrepareEnvironment prepares the task environment by loading config and building fuzzers
@@ -93,6 +93,11 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 	log.Println("╚════════════════════════════════════════════════════════════════╝")
 	log.Println("")
 
+	canBuild := params.FuzzerBuilder != nil
+	if !canBuild {
+		log.Printf("No fuzzer builder callback configured; build steps will be skipped when outputs are missing")
+	}
+
 	// Build fuzzers for each configurable sanitizer (address, memory, undefined, thread)
 	for _, sanitizer := range sanitizersToUse {
 		// Skip coverage here - it's handled separately below as mandatory
@@ -113,6 +118,10 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 
 		fuzzers, _ := params.FindFuzzers(sanitizerDir)
 		if len(fuzzers) == 0 {
+			if !canBuild {
+				log.Printf("No fuzzers found in %s for sanitizer %s and no builder configured", sanitizerDir, sanitizer)
+				continue
+			}
 			log.Printf("-------------------- Building fuzzers ----------------------")
 			log.Printf("No fuzzers found in %s for sanitizer %s. Building...", sanitizerDir, sanitizer)
 			if err := params.FuzzerBuilder(params.MyFuzzer, params.TaskDir, params.ProjectDir, sanitizerDir, sanitizer, cfg.Language, params.TaskDetail); err != nil {
@@ -136,6 +145,10 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 		}
 
 		if len(fuzzers) == 0 {
+			if !canBuild {
+				log.Printf("No coverage fuzzers found in %s and no builder configured", sanDir)
+				return cfg, sanitizerDirs, nil
+			}
 			log.Printf("-------------------- Building coverage fuzzers ----------------------")
 			log.Printf("No coverage fuzzers found in %s. Building with --sanitizer=%s", sanDir, san)
 			if err := params.FuzzerBuilder(params.MyFuzzer, params.TaskDir, params.ProjectDir, sanDir, san, cfg.Language, params.TaskDetail); err != nil {

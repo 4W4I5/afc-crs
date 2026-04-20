@@ -17,9 +17,16 @@ if [ -f "$SCRIPT_DIR/strategy/requirements.txt" ]; then
 fi
 
 # Load and export .env variables for Python strategies
-if [ -f "$SCRIPT_DIR/.env" ]; then
+ENV_FILE="$SCRIPT_DIR/.env"
+ENV_FALLBACK_FILE="$SCRIPT_DIR/.env.example"
+if [ -f "$ENV_FILE" ]; then
     set -a
-    source "$SCRIPT_DIR/.env"
+    source "$ENV_FILE"
+    set +a
+elif [ -f "$ENV_FALLBACK_FILE" ]; then
+    echo "[INFO] .env not found; loading defaults from .env.example"
+    set -a
+    source "$ENV_FALLBACK_FILE"
     set +a
 fi
 
