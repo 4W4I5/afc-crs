@@ -100,13 +100,13 @@ type StrategyConfig struct {
 // POVStrategyConfig holds POV strategy patterns and selection
 type POVStrategyConfig struct {
 	// Basic POV strategy patterns (xs* strategies)
-	BasicDeltaPattern    string `envconfig:"STRATEGY_POV_BASIC_DELTA_PATTERN" default:"xs*_delta_new.py"`
+	BasicDeltaPattern    string `envconfig:"STRATEGY_POV_BASIC_DELTA_PATTERN" default:"xs*_delta*.py"`
 	BasicCFullPattern    string `envconfig:"STRATEGY_POV_BASIC_C_FULL_PATTERN" default:"xs*_c_full.py"`
 	BasicJavaFullPattern string `envconfig:"STRATEGY_POV_BASIC_JAVA_FULL_PATTERN" default:"xs*_java_full.py"`
 	BasicFullPattern     string `envconfig:"STRATEGY_POV_BASIC_FULL_PATTERN" default:"xs*_full.py"`
 
 	// Advanced POV strategy patterns (as* strategies)
-	AdvancedDeltaPattern string `envconfig:"STRATEGY_POV_ADVANCED_DELTA_PATTERN" default:"as*_delta_new.py"`
+	AdvancedDeltaPattern string `envconfig:"STRATEGY_POV_ADVANCED_DELTA_PATTERN" default:"as*_delta*.py"`
 	AdvancedFullPattern  string `envconfig:"STRATEGY_POV_ADVANCED_FULL_PATTERN" default:"as*_full.py"`
 
 	// Strategy selection (empty, "all", "none", or specific strategy name)
@@ -259,6 +259,73 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+func isProxyBaseURL(baseURL string) bool {
+	url := strings.ToLower(strings.TrimSpace(baseURL))
+	if url == "" {
+		return false
+	}
+
+	proxyHints := []string{
+		"localhost",
+		"127.0.0.1",
+		"host.docker.internal",
+		"copilot-api",
+	}
+
+	for _, hint := range proxyHints {
+		if strings.Contains(url, hint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isLikelyPlaceholderKey(apiKey string) bool {
+	key := strings.ToLower(strings.TrimSpace(apiKey))
+	if key == "" {
+		return true
+	}
+
+	if key == "dummy" {
+		return true
+	}
+
+	placeholderHints := []string{
+		"your-actual",
+		"your-key",
+		"your_",
+		"placeholder",
+		"replace",
+		"changeme",
+		"example",
+		"sk-proj-your",
+		"sk-ant-your",
+		"xai-your",
+	}
+
+	for _, hint := range placeholderHints {
+		if strings.Contains(key, hint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isUsableAPIKey(apiKey, baseURL string) bool {
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		return false
+	}
+
+	if strings.EqualFold(key, "dummy") {
+		return isProxyBaseURL(baseURL)
+	}
+
+	return !isLikelyPlaceholderKey(key)
+}
+
 // Validate checks if required configuration is present based on mode
 func (c *Config) Validate() error {
 	switch c.Mode {
@@ -272,13 +339,13 @@ func (c *Config) Validate() error {
 		}
 	case "local":
 		// Check if appropriate API key is set based on model
-		if strings.Contains(c.AI.Model, "claude") && c.AI.AnthropicAPIKey == "" {
+		if strings.Contains(c.AI.Model, "claude") && !isUsableAPIKey(c.AI.AnthropicAPIKey, c.AI.AnthropicBaseURL) {
 			return fmt.Errorf("ANTHROPIC_API_KEY is required for model %s", c.AI.Model)
 		}
-		if strings.Contains(c.AI.Model, "gemini") && c.AI.GeminiAPIKey == "" {
+		if strings.Contains(c.AI.Model, "gemini") && !isUsableAPIKey(c.AI.GeminiAPIKey, c.AI.GeminiBaseURL) {
 			return fmt.Errorf("GEMINI_API_KEY is required for model %s", c.AI.Model)
 		}
-		if (strings.Contains(c.AI.Model, "gpt") || strings.HasPrefix(c.AI.Model, "o")) && c.AI.OpenAIAPIKey == "" {
+		if (strings.Contains(c.AI.Model, "gpt") || strings.HasPrefix(c.AI.Model, "o")) && !isUsableAPIKey(c.AI.OpenAIAPIKey, c.AI.OpenAIBaseURL) {
 			return fmt.Errorf("OPENAI_API_KEY is required for model %s", c.AI.Model)
 		}
 	default:

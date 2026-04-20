@@ -107,6 +107,12 @@ func (s *LocalCRSService) GetStatus() models.Status {
 // SubmitLocalTask implements local task submission
 func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 	myFuzzer := ""
+	diffDetected := false
+	diffPath := filepath.Join(taskDir, "diff")
+	if info, err := os.Stat(diffPath); err == nil && info.IsDir() {
+		diffDetected = true
+		log.Printf("Found 'diff' directory, enabling delta defaults for local mode")
+	}
 
 	// --- ensure LOCAL_TEST mode is enabled ---
 	if os.Getenv("LOCAL_TEST") == "" {
@@ -155,12 +161,13 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 			log.Printf("Could not read fuzz-tooling/projects/ directory: %v", err)
 		}
 
-		// Determine task type based on presence of "diff" directory
+		// Determine task type from diff presence and default to unharnessed synthesis for delta runs
 		taskType := models.TaskTypeFull
-		diffPath := filepath.Join(taskDir, "diff")
-		if info, err := os.Stat(diffPath); err == nil && info.IsDir() {
+		harnessesIncluded := true
+		if diffDetected {
 			taskType = models.TaskTypeDelta
-			log.Printf("Found 'diff' directory, setting task type to 'delta'")
+			harnessesIncluded = false
+			log.Printf("Found 'diff' directory, setting task type to 'delta' and harnesses_included=false")
 		} else {
 			log.Printf("No 'diff' directory found, setting task type to 'full'")
 		}
@@ -173,7 +180,7 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 			Focus:             focusName,
 			Type:              taskType,
 			Deadline:          time.Now().Add(time.Hour).Unix() * 1000,
-			HarnessesIncluded: true,
+			HarnessesIncluded: harnessesIncluded,
 			Metadata:          make(map[string]string),
 		}
 
@@ -190,6 +197,22 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 		}
 	}
 	//----------------------------------------------------------
+
+	if diffDetected {
+		if taskDetail.Type != models.TaskTypeDelta {
+			log.Printf("Diff directory detected; overriding task type from %s to delta", taskDetail.Type)
+			taskDetail.Type = models.TaskTypeDelta
+		}
+		if taskDetail.HarnessesIncluded {
+			log.Printf("Diff directory detected; overriding harnesses_included=true to false for local synthesis")
+			taskDetail.HarnessesIncluded = false
+		}
+	}
+
+	if !taskDetail.HarnessesIncluded {
+		myFuzzer = UNHARNESSED
+		log.Printf("HarnessesIncluded=false, enabling unharnessed synthesis mode")
+	}
 
 	// Get absolute paths
 	log.Printf("-------------------- Getting absolute task dir path ----------------------")
@@ -247,8 +270,7 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 	}
 
 	if len(allFuzzers) == 0 {
-		log.Printf("No fuzzers found after building all sanitizers")
-		return nil
+		return fmt.Errorf("no fuzzers found after building all sanitizers for task %s", taskDetail.TaskID)
 	}
 
 	log.Printf("Discovered %d fuzzers before filtering", len(allFuzzers))
@@ -285,6 +307,17 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 	}
 
 	allFuzzers = helpers.SortFuzzersByGroup(filteredFuzzers)
+	if len(allFuzzers) == 0 {
+		return fmt.Errorf("no fuzzers left after applying local fuzzer filters for task %s", taskDetail.TaskID)
+	}
+
+	unharnessedFuzzerSrcPath := ""
+	if srcAny, ok := s.unharnessedFuzzerSrc.Load(taskDetail.TaskID.String()); ok {
+		if srcPath, typeOK := srcAny.(string); typeOK {
+			unharnessedFuzzerSrcPath = srcPath
+			log.Printf("Using generated unharnessed fuzzer source for task %s: %s", taskDetail.TaskID, srcPath)
+		}
+	}
 
 	// Print execution summary
 	log.Println("")
@@ -330,7 +363,7 @@ func (s *LocalCRSService) SubmitLocalTask(taskDir string) error {
 		Model:                    s.model,
 		WorkerIndex:              s.workerIndex,
 		AnalysisServiceUrl:       s.analysisServiceUrl,
-		UnharnessedFuzzerSrcPath: "",
+		UnharnessedFuzzerSrcPath: unharnessedFuzzerSrcPath,
 		StrategyConfig:           &s.cfg.Strategy,
 		FuzzerConfig:             &s.cfg.Fuzzer,
 		Sanitizer:                s.cfg.Fuzzer.PreferredSanitizer,
@@ -446,11 +479,9 @@ func (s *LocalCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectD
 		}
 	}
 
-	if *myFuzzer == UNHARNESSED && sanitizer != "coverage" {
+	if *myFuzzer == UNHARNESSED {
 		log.Printf("Handling unharnessed task: %s", *myFuzzer)
-		cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir)
-
-		newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
+		newFuzzerSrcPath, newFuzzerPath, err := generateHarnessForUnharnessedTask(
 			taskDir,
 			taskDetail.Focus,
 			sanitizerDir,
@@ -458,7 +489,7 @@ func (s *LocalCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectD
 			sanitizer,
 		)
 		if err != nil {
-			log.Printf("Failed to generate fuzzer: %v", err)
+			return fmt.Errorf("failed to generate harness for unharnessed task: %w", err)
 		} else {
 			s.unharnessedFuzzerSrc.Store(taskDetail.TaskID.String(), newFuzzerSrcPath)
 			log.Printf("New fuzzer source: %s", newFuzzerSrcPath)
@@ -475,6 +506,7 @@ func (s *LocalCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, projectD
 				if output != "" {
 					log.Printf("[BuildAFCFuzzers] Output:\n%s", output)
 				}
+				return fmt.Errorf("failed building fuzzers for %s-%s: %w", taskDetail.ProjectName, sanitizer, err)
 			} else if output != "" {
 				log.Printf("[BuildAFCFuzzers] Build completed for %s-%s", taskDetail.ProjectName, sanitizer)
 			}

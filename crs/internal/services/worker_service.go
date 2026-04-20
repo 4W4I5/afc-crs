@@ -276,6 +276,11 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 	taskID := taskDetail.TaskID.String()
 	log.Printf("Processing task %s", taskID)
 
+	if !taskDetail.HarnessesIncluded && myFuzzer == "" {
+		myFuzzer = UNHARNESSED
+		log.Printf("HarnessesIncluded=false with no fuzzer assigned, enabling unharnessed synthesis mode")
+	}
+
 	// Create task directory with unique name
 	timestamp := time.Now().Format("20060102-150405")
 	taskDir := path.Join(s.workDir, fmt.Sprintf("%s-%s", taskID, timestamp))
@@ -345,8 +350,7 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 	}
 
 	if len(allFuzzers) == 0 {
-		log.Printf("No fuzzers found after building all sanitizers")
-		return nil
+		return fmt.Errorf("no fuzzers found after building all sanitizers for task %s", taskDetail.TaskID)
 	}
 
 	// Filter fuzzers
@@ -359,6 +363,17 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 			}
 		}
 		allFuzzers = helpers.SortFuzzersByGroup(allFilteredFuzzers)
+	}
+	if len(allFuzzers) == 0 {
+		return fmt.Errorf("no fuzzers left after applying worker fuzzer filters for task %s", taskDetail.TaskID)
+	}
+
+	unharnessedFuzzerSrcPath := ""
+	if srcAny, ok := s.unharnessedFuzzerSrc.Load(taskDetail.TaskID.String()); ok {
+		if srcPath, typeOK := srcAny.(string); typeOK {
+			unharnessedFuzzerSrcPath = srcPath
+			log.Printf("Using generated unharnessed fuzzer source for task %s: %s", taskDetail.TaskID, srcPath)
+		}
 	}
 
 	log.Printf("Found %d fuzzers: %v", len(allFuzzers), allFuzzers)
@@ -378,7 +393,7 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 		Model:                    s.model,
 		WorkerIndex:              s.workerIndex,
 		AnalysisServiceUrl:       s.analysisServiceUrl,
-		UnharnessedFuzzerSrcPath: "",
+		UnharnessedFuzzerSrcPath: unharnessedFuzzerSrcPath,
 		StrategyConfig:           &s.cfg.Strategy,
 		FuzzerConfig:             &s.cfg.Fuzzer,
 		Sanitizer:                s.cfg.Fuzzer.PreferredSanitizer,
@@ -442,11 +457,9 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 		}
 	}
 
-	if *myFuzzer == UNHARNESSED && sanitizer != "coverage" {
+	if *myFuzzer == UNHARNESSED {
 		log.Printf("Handling unharnessed task: %s", *myFuzzer)
-		cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir)
-
-		newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
+		newFuzzerSrcPath, newFuzzerPath, err := generateHarnessForUnharnessedTask(
 			taskDir,
 			taskDetail.Focus,
 			sanitizerDir,
@@ -454,7 +467,7 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 			sanitizer,
 		)
 		if err != nil {
-			log.Printf("Failed to generate fuzzer: %v", err)
+			return fmt.Errorf("failed to generate harness for unharnessed task: %w", err)
 		} else {
 			s.unharnessedFuzzerSrc.Store(taskDetail.TaskID.String(), newFuzzerSrcPath)
 			log.Printf("New fuzzer source: %s", newFuzzerSrcPath)
@@ -465,7 +478,13 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 	} else {
 		// For both Java and C tasks on worker
 		if true {
-			build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
+			output, err := build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
+			if err != nil {
+				if output != "" {
+					log.Printf("[BuildAFCFuzzers] Output:\n%s", output)
+				}
+				return fmt.Errorf("failed building fuzzers for %s-%s: %w", taskDetail.ProjectName, sanitizer, err)
+			}
 		} else {
 			workDir := filepath.Join(taskDir, "fuzz-tooling", "build", "work", fmt.Sprintf("%s-%s", taskDetail.ProjectName, sanitizer))
 

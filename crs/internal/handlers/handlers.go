@@ -172,7 +172,9 @@ func (h *Handler) SubmitLocalTask(taskPath string) {
         h.submissionService = "http://localhost:7081"
     }
 
-    h.crs.SubmitLocalTask(taskPath)
+    if err := h.crs.SubmitLocalTask(taskPath); err != nil {
+        log.Fatalf("SubmitLocalTask failed: %v", err)
+    }
 
 }
 

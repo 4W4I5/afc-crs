@@ -28,6 +28,115 @@ validate_env_file() {
     return 0
 }
 
+is_proxy_base_url() {
+    local url="$1"
+    local lower_url
+    lower_url=$(echo "$url" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$lower_url" == *"localhost"* ]] ||
+       [[ "$lower_url" == *"127.0.0.1"* ]] ||
+       [[ "$lower_url" == *"host.docker.internal"* ]] ||
+       [[ "$lower_url" == *"copilot-api"* ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+is_placeholder_api_key() {
+    local value="$1"
+    local lower
+    lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+
+    if [ -z "$lower" ]; then
+        return 0
+    fi
+
+    case "$lower" in
+        dummy|*your-actual*|*your-key*|*your_*|*placeholder*|*replace*|*changeme*|*example*|sk-proj-your-*|sk-ant-your-*|xai-your-*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+is_provider_key_usable() {
+    local key_value="$1"
+    local base_url="$2"
+
+    if [ -z "$key_value" ]; then
+        return 1
+    fi
+
+    if [ "$key_value" = "dummy" ] && is_proxy_base_url "$base_url"; then
+        return 0
+    fi
+
+    if is_placeholder_api_key "$key_value"; then
+        return 1
+    fi
+
+    return 0
+}
+
+ensure_delta_task_detail() {
+    local workspace="$1"
+    local task_detail_path="$workspace/task_detail.json"
+
+    if [ -z "$BASE_COMMIT" ]; then
+        return 0
+    fi
+
+    if [ -f "$task_detail_path" ]; then
+        print_info "Using existing task_detail.json for delta run: $task_detail_path"
+        return 0
+    fi
+
+    local project_name="unknown"
+    local focus="repo"
+    local project_dir="$workspace/fuzz-tooling/projects"
+
+    if [ -d "$project_dir" ]; then
+        for dir in "$project_dir"/*; do
+            if [ -d "$dir" ]; then
+                project_name=$(basename "$dir")
+                break
+            fi
+        done
+    fi
+
+    if [ ! -d "$workspace/repo" ] && [ -d "$workspace/$project_name" ]; then
+        focus="$project_name"
+    fi
+
+    local task_id="00000000-0000-0000-0000-000000000000"
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        task_id=$(cat /proc/sys/kernel/random/uuid)
+    fi
+
+    local deadline_ms=$(( ($(date +%s) + 3600) * 1000 ))
+
+    cat > "$task_detail_path" <<EOF
+{
+  "task_id": "$task_id",
+  "type": "delta",
+  "deadline": $deadline_ms,
+  "focus": "$focus",
+  "harnesses_included": false,
+  "project_name": "$project_name",
+  "source": [],
+  "metadata": {
+    "created_by": "FuzzingBrain.sh",
+    "scan_mode": "delta"
+  },
+  "state": "pending"
+}
+EOF
+
+    print_info "Created task_detail.json for delta run with harnesses_included=false"
+}
+
 run_crs() {
     local run_script="$CRS_DIR/run_crs.sh"
 
@@ -347,15 +456,19 @@ check_environment() {
     # Check if at least one API key is set
     local has_api_key=false
 
-    if [ -n "$ANTHROPIC_API_KEY" ] && [ "$ANTHROPIC_API_KEY" != "your-anthropic-api-key" ]; then
+    if is_provider_key_usable "$ANTHROPIC_API_KEY" "${ANTHROPIC_BASE_URL:-}"; then
         has_api_key=true
     fi
 
-    if [ -n "$OPENAI_API_KEY" ] && [ "$OPENAI_API_KEY" != "your-openai-api-key" ]; then
+    if is_provider_key_usable "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"; then
         has_api_key=true
     fi
 
-    if [ -n "$GEMINI_API_KEY" ] && [ "$GEMINI_API_KEY" != "your-gemini-api-key" ]; then
+    if is_provider_key_usable "$GEMINI_API_KEY" "${GEMINI_BASE_URL:-}"; then
+        has_api_key=true
+    fi
+
+    if is_provider_key_usable "$XAI_API_KEY" "${XAI_BASE_URL:-}"; then
         has_api_key=true
     fi
 
@@ -392,6 +505,62 @@ show_usage() {
     exit 1
 }
 
+require_option_value() {
+    local option_name="$1"
+    local option_value="$2"
+
+    if [ -z "$option_value" ] || [[ "$option_value" == -* ]]; then
+        print_error "Option $option_name requires a value"
+        show_usage
+    fi
+}
+
+generate_ref_diff() {
+    local workspace="$1"
+    local repo_dir="$workspace/repo"
+
+    if [ -z "$BASE_COMMIT" ]; then
+        return 0
+    fi
+
+    if [ ! -d "$repo_dir/.git" ] && [ -d "$workspace/.git" ]; then
+        repo_dir="$workspace"
+    fi
+
+    if [ ! -d "$repo_dir/.git" ]; then
+        print_error "Delta scan requested but git repository was not found"
+        print_error "Checked: $workspace/repo and $workspace"
+        return 1
+    fi
+
+    print_info "Delta scan mode: generating diff between base ($BASE_COMMIT) and delta (${DELTA_COMMIT:-HEAD})"
+    mkdir -p "$workspace/diff"
+
+    if ! git -C "$repo_dir" cat-file -e "${BASE_COMMIT}^{commit}" >/dev/null 2>&1; then
+        print_error "Base commit $BASE_COMMIT not found in repository $repo_dir"
+        return 1
+    fi
+
+    local target_commit="${DELTA_COMMIT:-HEAD}"
+    if [ -n "$DELTA_COMMIT" ] && ! git -C "$repo_dir" cat-file -e "${DELTA_COMMIT}^{commit}" >/dev/null 2>&1; then
+        print_error "Delta commit $DELTA_COMMIT not found in repository $repo_dir"
+        return 1
+    fi
+
+    if ! git -C "$repo_dir" diff "$BASE_COMMIT..$target_commit" > "$workspace/diff/ref.diff"; then
+        print_error "Failed to generate diff between $BASE_COMMIT and $target_commit"
+        return 1
+    fi
+
+    if [ -s "$workspace/diff/ref.diff" ]; then
+        print_info "Generated ref.diff from $BASE_COMMIT to $target_commit"
+    else
+        print_warn "Diff between $BASE_COMMIT and $target_commit is empty"
+    fi
+
+    return 0
+}
+
 # Parse arguments
 IN_PLACE=false
 OSS_FUZZ_PROJECT=""
@@ -406,14 +575,17 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --project)
+            require_option_value "$1" "$2"
             OSS_FUZZ_PROJECT="$2"
             shift 2
             ;;
         -b)
+            require_option_value "$1" "$2"
             BASE_COMMIT="$2"
             shift 2
             ;;
         -d)
+            require_option_value "$1" "$2"
             DELTA_COMMIT="$2"
             shift 2
             ;;
@@ -480,6 +652,14 @@ if is_project_name "$TARGET"; then
     print_info "Found existing project: $PROJECT_NAME"
     print_info "Workspace: $WORKSPACE"
     echo ""
+
+    if ! generate_ref_diff "$WORKSPACE"; then
+        exit 1
+    fi
+
+    if ! ensure_delta_task_detail "$WORKSPACE"; then
+        exit 1
+    fi
 
     # Check environment before running
     check_environment
@@ -565,36 +745,12 @@ elif is_git_url "$TARGET"; then
         fi
     fi
 
-    # Handle delta scan (generate ref.diff from base and delta commits)
-    if [ -n "$BASE_COMMIT" ]; then
-        print_info "Delta scan mode: generating diff between base ($BASE_COMMIT) and delta ($DELTA_COMMIT)"
-        mkdir -p "$WORKSPACE/diff"
+    if ! generate_ref_diff "$WORKSPACE"; then
+        exit 1
+    fi
 
-        cd "$WORKSPACE/repo"
-
-        # Verify both commits exist
-        if ! git cat-file -t "$BASE_COMMIT" >/dev/null 2>&1; then
-            print_error "Base commit $BASE_COMMIT not found in repository"
-            print_warn "Continuing without diff (full scan mode)"
-            rm -rf "$WORKSPACE/diff"
-            cd "$SCRIPT_DIR"
-        elif [ -n "$DELTA_COMMIT" ] && ! git cat-file -t "$DELTA_COMMIT" >/dev/null 2>&1; then
-            print_error "Delta commit $DELTA_COMMIT not found in repository"
-            print_warn "Continuing without diff (full scan mode)"
-            rm -rf "$WORKSPACE/diff"
-            cd "$SCRIPT_DIR"
-        else
-            # Generate diff between base and delta (or HEAD if delta not specified)
-            target_commit="${DELTA_COMMIT:-HEAD}"
-            git diff "$BASE_COMMIT..$target_commit" > "$WORKSPACE/diff/ref.diff"
-
-            if [ -s "$WORKSPACE/diff/ref.diff" ]; then
-                print_info "Generated ref.diff from $BASE_COMMIT to $target_commit"
-            else
-                print_warn "Diff between $BASE_COMMIT and $target_commit is empty"
-            fi
-            cd "$SCRIPT_DIR"
-        fi
+    if ! ensure_delta_task_detail "$WORKSPACE"; then
+        exit 1
     fi
 
     print_info "Workspace created successfully: $WORKSPACE"
@@ -612,6 +768,14 @@ elif is_git_url "$TARGET"; then
 else
     if [ ! -d "$TARGET" ]; then
         print_error "Directory does not exist: $TARGET"
+        exit 1
+    fi
+
+    if ! generate_ref_diff "$TARGET"; then
+        exit 1
+    fi
+
+    if ! ensure_delta_task_detail "$TARGET"; then
         exit 1
     fi
 

@@ -89,7 +89,8 @@ func TestSubmitLocalTaskMissingFuzzers(t *testing.T) {
 
 	service := NewLocalService(newTestConfig()).(*LocalCRSService)
 
-	// Should succeed even if no fuzzers are present (early return)
+	// Should fail fast when no fuzzers are discovered after build attempts
 	err := service.SubmitLocalTask(taskDir)
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no fuzzers found after building all sanitizers")
 }

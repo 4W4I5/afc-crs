@@ -2072,15 +2072,19 @@ def submit_pov_to_endpoint(log_file, project_dir, pov_metadata):
         "signature": vuln_signature,  # Include signature for deduplication
     }
 
-    NEW_FUZZER_SRC_PATH = os.environ.get("NEW_FUZZER_SRC_PATH", "")
+    NEW_FUZZER_SRC_PATH = os.environ.get("NEW_FUZZER_SRC_PATH", "").strip()
+    has_new_fuzzer_source = bool(NEW_FUZZER_SRC_PATH and os.path.exists(NEW_FUZZER_SRC_PATH))
     # If we have a generated fuzzer, attach its location and contents
-    if NEW_FUZZER_SRC_PATH:
+    if has_new_fuzzer_source:
         submission["fuzzer_file"] = NEW_FUZZER_SRC_PATH
         try:
             with open(NEW_FUZZER_SRC_PATH, "r", encoding="utf-8", errors="backslashreplace") as fp:
                 submission["fuzzer_source"] = fp.read()
         except Exception as e:
             log_message(log_file, f"Failed to read fuzzer source at {NEW_FUZZER_SRC_PATH}: {e}")   
+            has_new_fuzzer_source = False
+    elif NEW_FUZZER_SRC_PATH:
+        log_message(log_file, f"NEW_FUZZER_SRC_PATH set but file missing: {NEW_FUZZER_SRC_PATH}")
 
     # Add crash trace if available
     if crash_trace:
@@ -2093,7 +2097,7 @@ def submit_pov_to_endpoint(log_file, project_dir, pov_metadata):
     try:
         # Create the request
         url = f"{submission_endpoint}/v1/task/{task_id}/pov/"
-        if NEW_FUZZER_SRC_PATH:
+        if has_new_fuzzer_source:
             url = f"{submission_endpoint}/v1/task/{task_id}/freeform/pov/"
  
         headers = {
