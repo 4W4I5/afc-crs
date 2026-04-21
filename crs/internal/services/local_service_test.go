@@ -174,7 +174,7 @@ func TestLocalService_ConfigIntegration(t *testing.T) {
 	// Verify metadata directories are set
 	assert.Equal(t, "successful_povs", localService.povMetadataDir)
 	assert.Equal(t, "successful_povs_0", localService.povMetadataDir0)
-	assert.Equal(t, "successful_povs_advanced", localService.povAdvcancedMetadataDir)
+	assert.Equal(t, "successful_povs_advanced", localService.povAdvancedMetadataDir)
 
 	// Worker index should be empty for local service
 	assert.Empty(t, localService.workerIndex)

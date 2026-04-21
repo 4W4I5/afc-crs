@@ -55,5 +55,7 @@ func main() {
 	// Initialize handlers with task distribution capability
 	h := handlers.NewHandler(crsService, cfg.Services.AnalysisURL, cfg.Services.SubmissionURL)
 
-	h.SubmitLocalTask(absTaskDir)
+	if err := h.SubmitLocalTask(absTaskDir); err != nil {
+		log.Fatalf("Local task failed: %v", err)
+	}
 }

@@ -39,16 +39,16 @@ type FuzzerBuilder func(myFuzzer *string, taskDir, projectDir, sanitizerDir stri
 
 // PrepareEnvironmentParams contains parameters for PrepareEnvironment
 type PrepareEnvironmentParams struct {
-	MyFuzzer          *string
-	TaskDir           string
-	TaskDetail        models.TaskDetail
-	DockerfilePath    string
+	MyFuzzer           *string
+	TaskDir            string
+	TaskDetail         models.TaskDetail
+	DockerfilePath     string
 	DockerfileFullPath string
-	FuzzerDir         string
-	ProjectDir        string
-	FuzzerBuilder     FuzzerBuilder
-	FindFuzzers       func(string) ([]string, error)
-	SanitizerOverride []string // Optional: override sanitizers from config
+	FuzzerDir          string
+	ProjectDir         string
+	FuzzerBuilder      FuzzerBuilder
+	FindFuzzers        func(string) ([]string, error)
+	SanitizerOverride  []string // Optional: override sanitizers from config
 }
 
 // PrepareEnvironment prepares the task environment by loading config and building fuzzers
@@ -81,14 +81,14 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 	log.Println("║              FUZZER BUILD CONFIGURATION                        ║")
 	log.Println("╠════════════════════════════════════════════════════════════════╣")
 	log.Printf("║ Configuration Source: %-41s║\n", configSource)
-	log.Printf("║ Language: %-52s║\n", cfg.Language)
+	log.Printf("║ Language: %-53s║\n", cfg.Language)
 	log.Println("╠════════════════════════════════════════════════════════════════╣")
 	log.Println("║ Sanitizers to Build:                                           ║")
 	for _, san := range sanitizersToUse {
-		log.Printf("║   - %-58s║\n", san)
+		log.Printf("║   - %-59s║\n", san)
 	}
 	if strings.ToLower(cfg.Language) == "c" || strings.ToLower(cfg.Language) == "c++" {
-		log.Printf("║   - %-58s║\n", "coverage (mandatory for C/C++)")
+		log.Printf("║   - %-59s║\n", "coverage (mandatory for C/C++)")
 	}
 	log.Println("╚════════════════════════════════════════════════════════════════╝")
 	log.Println("")
@@ -101,7 +101,7 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 			continue
 		}
 
-		if *params.MyFuzzer != "" && *params.MyFuzzer != "UNHARNESSED" && !strings.Contains(*params.MyFuzzer, sanitizer) {
+		if *params.MyFuzzer != "" && *params.MyFuzzer != models.UnharnessedFuzzer && !strings.Contains(*params.MyFuzzer, sanitizer) {
 			continue
 		}
 
@@ -117,7 +117,7 @@ func PrepareEnvironment(params PrepareEnvironmentParams) (*ProjectConfig, []stri
 			log.Printf("No fuzzers found in %s for sanitizer %s. Building...", sanitizerDir, sanitizer)
 			if err := params.FuzzerBuilder(params.MyFuzzer, params.TaskDir, params.ProjectDir, sanitizerDir, sanitizer, cfg.Language, params.TaskDetail); err != nil {
 				log.Printf("Error building fuzzers for sanitizer %s: %v", sanitizer, err)
-				if *params.MyFuzzer == "UNHARNESSED" && params.TaskDetail.Type == models.TaskTypeDelta {
+				if *params.MyFuzzer == models.UnharnessedFuzzer {
 					return nil, nil, err
 				}
 			}

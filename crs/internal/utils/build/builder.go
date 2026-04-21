@@ -106,10 +106,36 @@ func BuildAFCFuzzers(taskDir string, sanitizer, projectName, projectDir, sanitiz
 
 func isTransientBuildFailure(output string) bool {
 	lower := strings.ToLower(output)
-	return strings.Contains(lower, "resource_exhausted") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "error: 429") ||
-		strings.Contains(lower, "too many requests")
+	patterns := []string{
+		"resource_exhausted",
+		"rate limit",
+		"error: 429",
+		"http 429",
+		"too many requests",
+		"quotafailure",
+		"you appear to have cloned an empty repository",
+		"thread failure detected",
+		"traceback (most recent call last)",
+		"expected flush after ref listing",
+		"expected 'acknowledgments'",
+		"connection reset",
+		"connection timed out",
+		"temporary failure",
+		"eof occurred",
+		"fatal: early eof",
+		"rpc failed",
+		"unable to create '",
+		".lock': file exists",
+		"resource temporarily unavailable",
+	}
+
+	for _, pattern := range patterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func truncateCommandOutput(output string) string {

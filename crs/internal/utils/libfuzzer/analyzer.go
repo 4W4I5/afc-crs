@@ -116,6 +116,11 @@ func IsCrashOutput(output string) bool {
 	return false
 }
 
+// FilterInstrumentedLines filters out INFO logs and VM warnings from output.
+func FilterInstrumentedLines(output string) string {
+	return filterInstrumentedLines(output)
+}
+
 // filterInstrumentedLines filters out INFO logs and VM warnings from output
 func filterInstrumentedLines(output string) string {
 	lines := strings.Split(output, "\n")
@@ -133,6 +138,11 @@ func filterInstrumentedLines(output string) string {
 	}
 
 	return strings.Join(filteredLines, "\n")
+}
+
+// ExtractCrashOutput extracts crash-related output with a bounded size.
+func ExtractCrashOutput(output string) string {
+	return extractCrashOutput(output)
 }
 
 // extractCrashOutput extracts crash-related output with 4KB size limit
@@ -196,6 +206,11 @@ func extractCrashOutput(output string) string {
 	return output
 }
 
+// GenerateCrashSignature generates a stable crash signature from fuzzer output.
+func GenerateCrashSignature(output string, sanitizer string) string {
+	return generateCrashSignature(output, sanitizer)
+}
+
 // generateCrashSignature generates a signature for a crash based on output and sanitizer
 func generateCrashSignature(output string, sanitizer string) string {
 	// Extract the crash location from the stack trace
@@ -207,6 +222,11 @@ func generateCrashSignature(output string, sanitizer string) string {
 	}
 
 	return generateVulnerabilitySignature0(output, sanitizer)
+}
+
+// GetFuzzerArgs builds docker command arguments for running libFuzzer.
+func GetFuzzerArgs(containerName, fuzzDir, fuzzerName, language, sanitizer, taskDir string) []string {
+	return getFuzzerArgs(containerName, fuzzDir, fuzzerName, language, sanitizer, taskDir)
 }
 
 // extractCrashLocation extracts the crash location from the output

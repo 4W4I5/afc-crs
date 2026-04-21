@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,9 +20,12 @@ import (
 	"crs/internal/models"
 	"crs/internal/telemetry"
 	"crs/internal/utils/helpers"
+	"crs/internal/utils/libfuzzer"
 
 	"go.opentelemetry.io/otel/attribute"
 )
+
+const libFuzzerPOVLimit = 3
 
 // runAdvancedPOVPhases runs multiple rounds of advanced POV generation strategies
 func runAdvancedPOVPhases(
@@ -632,43 +636,297 @@ func runBasicStrategies(fuzzer, taskDir, projectDir, fuzzDir, language string,
 	return <-resultChan
 }
 
-func runLibFuzzer(fuzzer, taskDir, projectDir, language string,
-	taskDetail models.TaskDetail, task models.Task, submissionEndpoint string) error {
-	// TODO: This is a highly complex 305-line function from crs_services.go:6685-6990
-	// It includes:
-	// - Docker container management (docker run --rm with dynamic naming)
-	// - Continuous fuzzing loop until deadline
-	// - Crash detection and processing (isCrashOutput)
-	// - Crash signature generation and deduplication
-	// - POV saving (saveAllCrashesAsPOVs)
-	// - Crash signature submission (generateCrashSignatureAndSubmit)
-	// - Automatic patching attempts with retry logic (300 retries!)
-	// - Global deadline management with context cancellation
-	// - Real-time POV statistics checking from submission service
-	// - Early termination when POV limit reached (LIMIT_POV_NUM = 3)
-	// - Telemetry span tracking
-	//
-	// Critical dependencies that need migration:
-	// - isCrashOutput (line 399) - detects if output contains crash signatures
-	// - extractCrashOutput (line 6351) - extracts relevant crash info (4KB limit)
-	// - generateCrashSignature (line 3790) - generates unique crash signatures
-	// - saveAllCrashesAsPOVs (line 3382) - saves crash files as POVs
-	// - generateCrashSignatureAndSubmit (line 3563) - submits crash info
-	// - getFuzzerArgs (line 7852) - constructs docker run arguments
-	// - filterInstrumentedLines (line 6333) - filters output
-	//
-	// Additional service state dependencies:
-	// - s.povMetadataDir (dynamic modification: fmt.Sprintf("%s_%d", s.povMetadataDir, successfulPoVs))
-	// - s.status.Processing (to check if multiple workers running)
-	//
-	// This function is EXTREMELY complex and tightly coupled with service state.
-	// Recommend migrating helper functions first, then refactoring this incrementally.
-	//
-	// For now, returning nil to indicate not implemented
-	log.Printf("TODO: runLibFuzzer not yet fully implemented in executor package")
-	log.Printf("Function requires migration of 305 lines + 7 helper functions from crs_services.go:6685-6990")
-	log.Printf("This is the most complex function in the codebase due to Docker management, crash handling, and retry logic")
+func runLibFuzzer(
+	fuzzer,
+	taskDir,
+	projectDir,
+	language,
+	sanitizer string,
+	taskDetail models.TaskDetail,
+	task models.Task,
+	submissionEndpoint,
+	workerIndex,
+	povMetadataDir,
+	unharnessedFuzzerSrcPath string,
+	onPOVFound func(),
+) error {
+	_ = task
+
+	if strings.TrimSpace(fuzzer) == "" {
+		return fmt.Errorf("libfuzzer requires a fuzzer binary path")
+	}
+
+	if strings.TrimSpace(sanitizer) == "" {
+		sanitizer = inferSanitizerFromFuzzerPath(fuzzer)
+	}
+	if strings.TrimSpace(sanitizer) == "" {
+		sanitizer = "address"
+	}
+
+	fuzzDir := filepath.Dir(fuzzer)
+	fuzzerName := filepath.Base(fuzzer)
+	crashesDir := filepath.Join(fuzzDir, "crashes")
+	if err := os.MkdirAll(crashesDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create crashes directory %s: %w", crashesDir, err)
+	}
+
+	if strings.TrimSpace(povMetadataDir) == "" {
+		povMetadataDir = "successful_povs"
+	}
+
+	deadline := deriveLibFuzzerDeadline(taskDetail)
+	seenCrashSignatures := make(map[string]struct{})
+	successfulPoVs := 0
+
+	unharnessedMap := make(map[string]string)
+	if strings.TrimSpace(unharnessedFuzzerSrcPath) != "" {
+		unharnessedMap[taskDetail.TaskID.String()] = unharnessedFuzzerSrcPath
+	}
+
+	if err := cleanupCrashArtifacts(crashesDir); err != nil {
+		log.Printf("Warning: failed to clean stale crash artifacts in %s: %v", crashesDir, err)
+	}
+
+	for attempt := 1; ; attempt++ {
+		if time.Now().After(deadline) {
+			log.Printf("LibFuzzer deadline reached for %s", fuzzerName)
+			return nil
+		}
+
+		if shouldUseSubmissionService(submissionEndpoint) {
+			povCount, _, err := getPOVStatsFromSubmissionService(taskDetail.TaskID.String(), submissionEndpoint)
+			if err != nil {
+				log.Printf("Warning: failed checking POV stats before libfuzzer attempt: %v", err)
+			} else if povCount >= libFuzzerPOVLimit {
+				log.Printf("POV limit reached (%d), stopping libfuzzer for %s", povCount, fuzzerName)
+				return nil
+			}
+		}
+
+		iterationWindow := time.Until(deadline)
+		if iterationWindow > 30*time.Minute {
+			iterationWindow = 30 * time.Minute
+		}
+		if iterationWindow <= 0 {
+			return nil
+		}
+
+		containerName := fmt.Sprintf("crs-libfuzzer-%s-%d", shortTaskID(taskDetail.TaskID.String()), attempt)
+		args := libfuzzer.GetFuzzerArgs(containerName, fuzzDir, fuzzerName, language, sanitizer, taskDir)
+
+		attemptCtx, cancel := context.WithTimeout(context.Background(), iterationWindow)
+		cmd := exec.CommandContext(attemptCtx, "docker", args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+		var outBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &outBuf
+
+		log.Printf("[LibFuzzer] attempt=%d fuzzer=%s sanitizer=%s window=%v", attempt, fuzzerName, sanitizer, iterationWindow)
+
+		if err := cmd.Start(); err != nil {
+			cancel()
+			return fmt.Errorf("failed to start libfuzzer docker command: %w", err)
+		}
+
+		waitCh := make(chan error, 1)
+		go func() {
+			waitCh <- cmd.Wait()
+		}()
+
+		var runErr error
+		select {
+		case runErr = <-waitCh:
+		case <-attemptCtx.Done():
+			terminateProcessGroup(cmd)
+			runErr = <-waitCh
+		}
+		cancel()
+
+		rawOutput := outBuf.String()
+		filteredOutput := libfuzzer.FilterInstrumentedLines(rawOutput)
+		crashDetected := libfuzzer.IsCrashOutput(filteredOutput)
+		artifactDetected := hasCrashArtifacts(crashesDir)
+
+		if runErr != nil && !crashDetected && !artifactDetected {
+			if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+				log.Printf("[LibFuzzer] attempt=%d timed out after %v", attempt, iterationWindow)
+			} else {
+				log.Printf("[LibFuzzer] attempt=%d ended without crash: %v", attempt, runErr)
+			}
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		if !crashDetected && !artifactDetected {
+			log.Printf("[LibFuzzer] attempt=%d completed without crashes", attempt)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		crashOutput := libfuzzer.ExtractCrashOutput(filteredOutput)
+		if strings.TrimSpace(crashOutput) == "" {
+			crashOutput = filteredOutput
+		}
+
+		savedCrashOutput := SaveAllCrashesAsPOVs(
+			crashesDir,
+			taskDir,
+			fuzzer,
+			fuzzDir,
+			projectDir,
+			crashOutput,
+			sanitizer,
+			taskDetail,
+			fuzzerName,
+			povMetadataDir,
+		)
+		if strings.TrimSpace(savedCrashOutput) != "" {
+			crashOutput = savedCrashOutput
+		}
+
+		vulnSignature := strings.TrimSpace(libfuzzer.GenerateCrashSignature(crashOutput, sanitizer))
+		if vulnSignature == "" {
+			vulnSignature = fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+		}
+
+		if _, seen := seenCrashSignatures[vulnSignature]; seen {
+			log.Printf("[LibFuzzer] duplicate crash signature skipped: %s", vulnSignature)
+			continue
+		}
+		seenCrashSignatures[vulnSignature] = struct{}{}
+		successfulPoVs++
+
+		if onPOVFound != nil {
+			onPOVFound()
+		}
+
+		submitErr := GenerateCrashSignatureAndSubmit(POVSubmissionParams{
+			CrashesDir:           crashesDir,
+			FuzzDir:              fuzzDir,
+			TaskDir:              taskDir,
+			ProjectDir:           projectDir,
+			Sanitizer:            sanitizer,
+			TaskDetail:           taskDetail,
+			Fuzzer:               fuzzerName,
+			Output:               crashOutput,
+			VulnSignature:        vulnSignature,
+			SubmissionEndpoint:   submissionEndpoint,
+			WorkerIndex:          workerIndex,
+			POVMetadataDir:       povMetadataDir,
+			UnharnessedFuzzerSrc: unharnessedMap,
+		})
+		if submitErr != nil {
+			log.Printf("Warning: failed to submit crash signature %s: %v", vulnSignature, submitErr)
+		}
+
+		if successfulPoVs >= libFuzzerPOVLimit {
+			log.Printf("[LibFuzzer] local POV limit reached (%d), stopping", successfulPoVs)
+			return nil
+		}
+	}
+}
+
+func deriveLibFuzzerDeadline(taskDetail models.TaskDetail) time.Time {
+	if taskDetail.Deadline <= 0 {
+		return time.Now().Add(30 * time.Minute)
+	}
+
+	deadline := time.Unix(taskDetail.Deadline/1000, 0)
+	if deadline.Before(time.Now()) {
+		return time.Now().Add(30 * time.Minute)
+	}
+
+	return deadline
+}
+
+func inferSanitizerFromFuzzerPath(fuzzerPath string) string {
+	base := filepath.Base(filepath.Dir(fuzzerPath))
+	segments := strings.Split(base, "-")
+	if len(segments) < 2 {
+		return ""
+	}
+
+	candidate := strings.TrimSpace(segments[len(segments)-1])
+	switch candidate {
+	case "address", "memory", "undefined", "thread", "coverage", "asan", "msan", "ubsan", "tsan":
+		if candidate == "asan" {
+			return "address"
+		}
+		if candidate == "msan" {
+			return "memory"
+		}
+		if candidate == "ubsan" {
+			return "undefined"
+		}
+		if candidate == "tsan" {
+			return "thread"
+		}
+		return candidate
+	default:
+		return ""
+	}
+}
+
+func hasCrashArtifacts(crashesDir string) bool {
+	patterns := []string{"crash-*"}
+	if os.Getenv("DETECT_TIMEOUT_CRASH") == "1" {
+		patterns = append(patterns, "timeout-*")
+	}
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(crashesDir, pattern))
+		if err != nil {
+			continue
+		}
+		if len(matches) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func cleanupCrashArtifacts(crashesDir string) error {
+	patterns := []string{"crash-*", "timeout-*", "leak-*"}
+
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(crashesDir, pattern))
+		if err != nil {
+			return fmt.Errorf("failed globbing pattern %s: %w", pattern, err)
+		}
+		for _, m := range matches {
+			if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed removing stale crash artifact %s: %w", m, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+func terminateProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil || pgid <= 0 {
+		return
+	}
+
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+}
+
+func shortTaskID(taskID string) string {
+	trimmed := strings.TrimSpace(taskID)
+	if len(trimmed) >= 8 {
+		return strings.ToLower(trimmed[:8])
+	}
+	if trimmed == "" {
+		return "unknown"
+	}
+	return strings.ToLower(trimmed)
 }
 
 func runAdvancedPOVStrategiesWithTimeout(
@@ -958,7 +1216,7 @@ func runAdvancedPOVStrategiesWithTimeout(
 				if runCmd.Process != nil {
 					pgid, err := syscall.Getpgid(runCmd.Process.Pid)
 					if err == nil {
-						errKill := syscall.Kill(-pgid, syscall.SIGKILL) // Kill negative PGID
+						errKill := syscall.Kill(-pgid, syscall.SIGKILL)                              // Kill negative PGID
 						if errKill != nil && !strings.Contains(errKill.Error(), "no such process") { // Ignore "no such process" error
 							log.Printf("[POV Round-%d Phase-%d] Error killing process group %d for %s: %v", roundNum, phase, -pgid, strategyName, errKill)
 						}

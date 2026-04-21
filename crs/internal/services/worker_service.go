@@ -30,18 +30,18 @@ import (
 
 // WorkerCRSService implements CRSService for worker mode (task execution)
 type WorkerCRSService struct {
-	cfg                     *config.Config
-	workDir                 string
-	povMetadataDir          string
-	povMetadataDir0         string
-	povAdvcancedMetadataDir string
-	patchWorkDir            string
-	submissionEndpoint      string
-	workerIndex             string
-	analysisServiceUrl      string
-	model                   string
-	unharnessedFuzzerSrc    sync.Map
-	workerPort              int
+	cfg                    *config.Config
+	workDir                string
+	povMetadataDir         string
+	povMetadataDir0        string
+	povAdvancedMetadataDir string
+	patchWorkDir           string
+	submissionEndpoint     string
+	workerIndex            string
+	analysisServiceUrl     string
+	model                  string
+	unharnessedFuzzerSrc   sync.Map
+	workerPort             int
 
 	cpuUsageFn      func() (float64, error)
 	processTaskFunc func(string, models.TaskDetail, models.Task) error
@@ -87,17 +87,17 @@ func NewWorkerService(cfg *config.Config) CRSService {
 	}
 
 	service := &WorkerCRSService{
-		cfg:                     cfg,
-		workDir:                 workDir,
-		povMetadataDir:          "successful_povs",
-		povMetadataDir0:         "successful_povs_0",
-		povAdvcancedMetadataDir: "successful_povs_advanced",
-		patchWorkDir:            "patch_workspace",
-		model:                   cfg.AI.Model,
-		workerIndex:             cfg.Worker.Index,
-		submissionEndpoint:      submissionEndpoint,
-		analysisServiceUrl:      cfg.Services.AnalysisURL,
-		workerPort:              cfg.Worker.Port,
+		cfg:                    cfg,
+		workDir:                workDir,
+		povMetadataDir:         "successful_povs",
+		povMetadataDir0:        "successful_povs_0",
+		povAdvancedMetadataDir: "successful_povs_advanced",
+		patchWorkDir:           "patch_workspace",
+		model:                  cfg.AI.Model,
+		workerIndex:            cfg.Worker.Index,
+		submissionEndpoint:     submissionEndpoint,
+		analysisServiceUrl:     cfg.Services.AnalysisURL,
+		workerPort:             cfg.Worker.Port,
 	}
 
 	service.cpuUsageFn = getAverageCPUUsage
@@ -269,6 +269,10 @@ func (s *WorkerCRSService) GetWorkDir() string {
 
 // processTask processes a single task detail (worker executes directly)
 func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDetail, fullTask models.Task) error {
+	if strings.TrimSpace(myFuzzer) == "" {
+		return fmt.Errorf("worker task missing fuzzer context path required for harness generation")
+	}
+
 	taskID := taskDetail.TaskID.String()
 	log.Printf("Processing task %s", taskID)
 
@@ -277,16 +281,15 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 	taskDir := path.Join(s.workDir, fmt.Sprintf("%s-%s", taskID, timestamp))
 
 	// If fuzzer path is provided, use its parent directory up to fuzz-tooling/build/out
-	if myFuzzer != "" {
-		// Find the index of "fuzz-tooling/" in the fuzzer path
-		fuzzToolingIndex := strings.Index(myFuzzer, "fuzz-tooling/")
-		if fuzzToolingIndex != -1 {
-			// Extract the base directory (everything before fuzz-tooling/build/out)
-			taskDir = myFuzzer[:fuzzToolingIndex]
-			// Remove trailing slash if present
-			taskDir = strings.TrimRight(taskDir, "/")
-		}
+	// Find the index of "fuzz-tooling/" in the provided context fuzzer path.
+	fuzzToolingIndex := strings.Index(myFuzzer, "fuzz-tooling/")
+	if fuzzToolingIndex == -1 {
+		return fmt.Errorf("invalid worker fuzzer context path (missing fuzz-tooling): %s", myFuzzer)
 	}
+	taskDir = strings.TrimRight(myFuzzer[:fuzzToolingIndex], "/")
+
+	// Always generate a fresh LLM harness and never execute legacy discovered targets.
+	myFuzzer = models.UnharnessedFuzzer
 
 	// Get absolute paths
 	absTaskDir, err := filepath.Abs(taskDir)
@@ -316,48 +319,30 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 		SanitizerOverride:  s.cfg.Fuzzer.GetSanitizerList(), // Use config sanitizers if set
 	}
 
-	cfg, sanitizerDirs, err := environment.PrepareEnvironment(params)
+	cfg, _, err := environment.PrepareEnvironment(params)
 	if err != nil {
 		return err
 	}
 
-	// Collect all fuzzers from all sanitizer builds
-	var allFuzzers []string
-	sanitizerDirsCopy := make([]string, len(sanitizerDirs))
-	copy(sanitizerDirsCopy, sanitizerDirs)
-
-	// Now use the copy to find fuzzers
-	for _, sdir := range sanitizerDirsCopy {
-		fuzzers, err := fuzzer.FindFuzzers(sdir)
-		if err != nil {
-			log.Printf("Warning: failed to find fuzzers in %s: %v", sdir, err)
-			continue
-		}
-
-		for _, fz := range fuzzers {
-			fuzzerPath := filepath.Join(sdir, fz)
-			allFuzzers = append(allFuzzers, fuzzerPath)
-		}
+	generatedSrcAny, srcOK := s.unharnessedFuzzerSrc.Load(taskDetail.TaskID.String())
+	if !srcOK {
+		return fmt.Errorf("generated harness source path not found for task %s", taskDetail.TaskID)
+	}
+	generatedSourcePath, castOK := generatedSrcAny.(string)
+	if !castOK || strings.TrimSpace(generatedSourcePath) == "" {
+		return fmt.Errorf("generated harness source path is invalid for task %s", taskDetail.TaskID)
 	}
 
-	if len(allFuzzers) == 0 {
-		log.Printf("No fuzzers found after building all sanitizers")
-		return nil
+	generatedBinaryPath := strings.TrimSpace(myFuzzer)
+	if generatedBinaryPath == "" || generatedBinaryPath == models.UnharnessedFuzzer {
+		return fmt.Errorf("generated harness binary path is missing for task %s", taskDetail.TaskID)
+	}
+	if stat, statErr := os.Stat(generatedBinaryPath); statErr != nil || stat.IsDir() {
+		return fmt.Errorf("generated harness binary is not available at %s", generatedBinaryPath)
 	}
 
-	// Filter fuzzers
-	const MAX_FUZZERS = 10
-	if true {
-		var allFilteredFuzzers []string
-		for _, fuzzerPath := range allFuzzers {
-			if strings.Contains(fuzzerPath, "-address/") || (strings.Contains(fuzzerPath, "-memory/") && len(allFuzzers) < MAX_FUZZERS) {
-				allFilteredFuzzers = append(allFilteredFuzzers, fuzzerPath)
-			}
-		}
-		allFuzzers = helpers.SortFuzzersByGroup(allFilteredFuzzers)
-	}
-
-	log.Printf("Found %d fuzzers: %v", len(allFuzzers), allFuzzers)
+	allFuzzers := []string{generatedBinaryPath}
+	log.Printf("Using generated harness target only: %s", filepath.Base(generatedBinaryPath))
 
 	// Process the task using executor package
 	execParams := executor.TaskExecutionParams{
@@ -370,18 +355,18 @@ func (s *WorkerCRSService) processTask(myFuzzer string, taskDetail models.TaskDe
 		SubmissionEndpoint:       s.submissionEndpoint,
 		POVMetadataDir:           s.povMetadataDir,
 		POVMetadataDir0:          s.povMetadataDir0,
-		POVAdvancedMetadataDir:   s.povAdvcancedMetadataDir,
+		POVAdvancedMetadataDir:   s.povAdvancedMetadataDir,
 		Model:                    s.model,
 		WorkerIndex:              s.workerIndex,
 		AnalysisServiceUrl:       s.analysisServiceUrl,
-		UnharnessedFuzzerSrcPath: "",
+		UnharnessedFuzzerSrcPath: generatedSourcePath,
 		StrategyConfig:           &s.cfg.Strategy,
 		FuzzerConfig:             &s.cfg.Fuzzer,
 		Sanitizer:                s.cfg.Fuzzer.PreferredSanitizer,
 	}
 
 	if err := executor.ExecuteFuzzingTask(execParams); err != nil {
-		log.Printf("Processing task %s: %v fuzzer: %s", taskDetail.TaskID, err, myFuzzer)
+		return fmt.Errorf("processing task %s with fuzzer %s: %w", taskDetail.TaskID, myFuzzer, err)
 	}
 
 	return nil
@@ -439,74 +424,75 @@ func (s *WorkerCRSService) buildFuzzersDocker(myFuzzer *string, taskDir, project
 	}
 
 	if *myFuzzer == UNHARNESSED && sanitizer != "coverage" {
-		if !isDeltaTask(taskDetail) {
-			log.Printf(
-				"Skipping UNHARNESSED generation for non-delta task %s (type=%s)",
-				taskDetail.TaskID,
-				taskDetail.Type,
-			)
-		} else {
+		if isDeltaTask(taskDetail) {
 			if err := ensureDeltaDiffReady(taskDir); err != nil {
 				return fmt.Errorf("delta UNHARNESSED generation precheck failed: %w", err)
 			}
-
-			log.Printf("Handling delta unharnessed task: %s", *myFuzzer)
-			if err := cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir); err != nil {
-				return fmt.Errorf("failed to prepare OSS-Fuzz/main repo for unharnessed generation: %w", err)
-			}
-
-			newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
-				taskDir,
-				taskDetail.Focus,
-				sanitizerDir,
-				taskDetail.ProjectName,
-				sanitizer,
-			)
-			if err != nil {
-				return fmt.Errorf("failed to generate delta unharnessed fuzzer: %w", err)
-			}
-
-			s.unharnessedFuzzerSrc.Store(taskDetail.TaskID.String(), newFuzzerSrcPath)
-			log.Printf("New fuzzer source: %s", newFuzzerSrcPath)
-
-			*myFuzzer = newFuzzerPath
-			log.Printf("New fuzzer generated: %s", *myFuzzer)
-			return nil
 		}
+
+		log.Printf("Generating default LLM harness for task %s (type=%s)", taskDetail.TaskID, taskDetail.Type)
+		if err := cloneOssFuzzAndMainRepoOnce(taskDir, taskDetail.ProjectName, sanitizerDir); err != nil {
+			return fmt.Errorf("failed to prepare OSS-Fuzz/main repo for unharnessed generation: %w", err)
+		}
+
+		newFuzzerSrcPath, newFuzzerPath, err := generateFuzzerForUnharnessedTask(
+			taskDir,
+			taskDetail.Focus,
+			sanitizerDir,
+			taskDetail.ProjectName,
+			sanitizer,
+			taskDetail.Type,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to generate default LLM fuzzer: %w", err)
+		}
+
+		s.unharnessedFuzzerSrc.Store(taskDetail.TaskID.String(), newFuzzerSrcPath)
+		log.Printf("New fuzzer source: %s", newFuzzerSrcPath)
+
+		*myFuzzer = newFuzzerPath
+		log.Printf("New fuzzer generated: %s", *myFuzzer)
+		return nil
 	}
 
 	// For both Java and C tasks on worker
 	if true {
-		build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
+		output, err := build.BuildAFCFuzzers(taskDir, sanitizer, taskDetail.ProjectName, sanitizerProjectDir, sanitizerDir)
+		if err != nil {
+			if output != "" {
+				log.Printf("[BuildAFCFuzzers] Output:\n%s", output)
+			}
+			return fmt.Errorf("failed to build fuzzers for %s-%s: %w", taskDetail.ProjectName, sanitizer, err)
+		}
 	} else {
 		workDir := filepath.Join(taskDir, "fuzz-tooling", "build", "work", fmt.Sprintf("%s-%s", taskDetail.ProjectName, sanitizer))
 
-			cmdArgs := []string{
-				"run",
-				"--privileged",
-				"--shm-size=8g",
-				"--platform", "linux/amd64",
-				"--rm",
-				"-e", "FUZZING_ENGINE=libfuzzer",
-				"-e", fmt.Sprintf("SANITIZER=%s", sanitizer),
-				"-e", "ARCHITECTURE=x86_64",
-				"-e", fmt.Sprintf("PROJECT_NAME=%s", taskDetail.ProjectName),
-				"-e", "HELPER=True",
-				"-e", fmt.Sprintf("FUZZING_LANGUAGE=%s", language),
-				"-v", fmt.Sprintf("%s:/src/%s", sanitizerProjectDir, taskDetail.ProjectName),
-				"-v", fmt.Sprintf("%s:/out", sanitizerDir),
-				"-v", fmt.Sprintf("%s:/work", workDir),
-				"-t", fmt.Sprintf("aixcc-afc/%s", taskDetail.ProjectName),
-			}
+		cmdArgs := []string{
+			"run",
+			"--privileged",
+			"--shm-size=8g",
+			"--platform", "linux/amd64",
+			"--rm",
+			"-e", "FUZZING_ENGINE=libfuzzer",
+			"-e", fmt.Sprintf("SANITIZER=%s", sanitizer),
+			"-e", "ARCHITECTURE=x86_64",
+			"-e", fmt.Sprintf("PROJECT_NAME=%s", taskDetail.ProjectName),
+			"-e", "HELPER=True",
+			"-e", fmt.Sprintf("FUZZING_LANGUAGE=%s", language),
+			"-v", fmt.Sprintf("%s:/src/%s", sanitizerProjectDir, taskDetail.ProjectName),
+			"-v", fmt.Sprintf("%s:/out", sanitizerDir),
+			"-v", fmt.Sprintf("%s:/work", workDir),
+			"-t", fmt.Sprintf("aixcc-afc/%s", taskDetail.ProjectName),
+		}
 
-			buildCmd := exec.Command("docker", cmdArgs...)
+		buildCmd := exec.Command("docker", cmdArgs...)
 
-			var buildOutput bytes.Buffer
-			buildCmd.Stdout = &buildOutput
-			buildCmd.Stderr = &buildOutput
+		var buildOutput bytes.Buffer
+		buildCmd.Stdout = &buildOutput
+		buildCmd.Stderr = &buildOutput
 
-			log.Printf("Running Docker build for sanitizer=%s, project=%s\nCommand: %v",
-				sanitizer, taskDetail.ProjectName, buildCmd.Args)
+		log.Printf("Running Docker build for sanitizer=%s, project=%s\nCommand: %v",
+			sanitizer, taskDetail.ProjectName, buildCmd.Args)
 
 		if err := buildCmd.Run(); err != nil {
 			log.Printf("Build fuzzer output:\n%s", buildOutput.String())
@@ -809,7 +795,7 @@ func (s *WorkerCRSService) runSarifPOVStrategies(myFuzzer, taskDir, sarifFilePat
 				language,
 				"--model", s.model,
 				"--do-patch=false",
-				"--pov-metadata-dir", s.povAdvcancedMetadataDir,
+				"--pov-metadata-dir", s.povAdvancedMetadataDir,
 				"--check-patch-success",
 				fmt.Sprintf("--fuzzing-timeout=%d", timeout),
 				fmt.Sprintf("--pov-phase=%d", phase),

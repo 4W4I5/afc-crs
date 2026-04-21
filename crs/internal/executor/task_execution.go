@@ -23,7 +23,6 @@ import (
 
 const (
 	SafetyBufferMinutes = 10
-	UNHARNESSED         = "UNHARNESSED"
 )
 
 // TaskExecutionParams contains all parameters needed for executing a fuzzing task on a worker
@@ -72,8 +71,8 @@ func ExecuteFuzzingTask(params TaskExecutionParams) error {
 	}
 
 	if len(fuzzersToExecute) == 0 {
-		log.Printf("No fuzzers specified for execution, skipping...")
-		return nil
+		log.Printf("No fuzzers specified for execution")
+		return ErrNoFuzzers
 	}
 
 	if isSubmissionServiceDisabled() && params.SubmissionEndpoint != "" {
@@ -186,6 +185,13 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 	type signal struct{}
 	var povFound sync.Once
 	povChan := make(chan signal)
+	markPOVFound := func(source string) {
+		povFound.Do(func() {
+			log.Printf("POV signal received from %s", source)
+			povSuccess = true
+			close(povChan)
+		})
+	}
 
 	ctx := context.Background()
 
@@ -195,8 +201,22 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 	if lang == "c" || lang == "c++" {
 		libFuzzerStarted = true
 		go func() {
-			runLibFuzzer(fuzzer, params.TaskDir, projectDir, params.ProjectConfig.Language,
-				params.TaskDetail, params.Task, params.SubmissionEndpoint)
+			if err := runLibFuzzer(
+				fuzzer,
+				params.TaskDir,
+				projectDir,
+				params.ProjectConfig.Language,
+				sanitizer,
+				params.TaskDetail,
+				params.Task,
+				params.SubmissionEndpoint,
+				params.WorkerIndex,
+				params.POVMetadataDir,
+				params.UnharnessedFuzzerSrcPath,
+				func() { markPOVFound("libfuzzer") },
+			); err != nil {
+				log.Printf("LibFuzzer run ended with error for %s: %v", fuzzer, err)
+			}
 		}()
 		log.Printf("Started LibFuzzer for C/C++ project")
 	}
@@ -253,8 +273,23 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 				params.ProjectConfig.Language, params.TaskDetail, params.Task, basicConfig)
 		} else {
 			// Testing mode: only run libFuzzer and exit
-			runLibFuzzer(fuzzer, params.TaskDir, projectDir, params.ProjectConfig.Language,
-				params.TaskDetail, params.Task, params.SubmissionEndpoint)
+			if err := runLibFuzzer(
+				fuzzer,
+				params.TaskDir,
+				projectDir,
+				params.ProjectConfig.Language,
+				sanitizer,
+				params.TaskDetail,
+				params.Task,
+				params.SubmissionEndpoint,
+				params.WorkerIndex,
+				params.POVMetadataDir,
+				params.UnharnessedFuzzerSrcPath,
+				nil,
+			); err != nil {
+				log.Printf("LibFuzzer test execution failed: %v", err)
+				os.Exit(1)
+			}
 			os.Exit(0)
 		}
 		basicPhasesSpan.End()
@@ -274,14 +309,28 @@ func executeFuzzingWorkflow(fuzzer string, params TaskExecutionParams, projectDi
 	// Continue with advanced phases (for delta scan or full scan with patching enabled)
 	if povSuccess {
 		log.Printf("POV found in basic phase!")
-		povFound.Do(func() { close(povChan) })
+		markPOVFound("basic phase")
 	} else {
 		log.Printf("No POV found in basic phase, will continue with advanced phases")
 		// If LibFuzzer not started (e.g., for Java), start it now
 		if !libFuzzerStarted {
 			go func() {
-				runLibFuzzer(fuzzer, params.TaskDir, projectDir, params.ProjectConfig.Language,
-					params.TaskDetail, params.Task, params.SubmissionEndpoint)
+				if err := runLibFuzzer(
+					fuzzer,
+					params.TaskDir,
+					projectDir,
+					params.ProjectConfig.Language,
+					sanitizer,
+					params.TaskDetail,
+					params.Task,
+					params.SubmissionEndpoint,
+					params.WorkerIndex,
+					params.POVMetadataDir,
+					params.UnharnessedFuzzerSrcPath,
+					func() { markPOVFound("libfuzzer") },
+				); err != nil {
+					log.Printf("LibFuzzer run ended with error for %s: %v", fuzzer, err)
+				}
 			}()
 			log.Printf("Started LibFuzzer for non-C/C++ project")
 		}
@@ -394,7 +443,7 @@ func executePatchingPhase(ctx context.Context, fuzzer string, params TaskExecuti
 func executeXPatchPhase(fuzzer string, params TaskExecutionParams, projectDir, sanitizer string,
 	deadlineTime time.Time,
 ) bool {
-	if fuzzer == UNHARNESSED {
+	if fuzzer == models.UnharnessedFuzzer {
 		log.Printf("Skipping XPatch for unharnessed fuzzer")
 		return false
 	}

@@ -43,6 +43,10 @@ const (
     SourceTypeDiff        SourceType = "diff"
 )
 
+const (
+    UnharnessedFuzzer = "UNHARNESSED"
+)
+
 type Task struct {
     MessageID   uuid.UUID    `json:"message_id"`
     MessageTime int64        `json:"message_time"`

@@ -186,7 +186,7 @@ func TestWorkerService_ConfigIntegration(t *testing.T) {
 	// Verify metadata directories are set
 	assert.Equal(t, "successful_povs", workerService.povMetadataDir)
 	assert.Equal(t, "successful_povs_0", workerService.povMetadataDir0)
-	assert.Equal(t, "successful_povs_advanced", workerService.povAdvcancedMetadataDir)
+	assert.Equal(t, "successful_povs_advanced", workerService.povAdvancedMetadataDir)
 	assert.Equal(t, "patch_workspace", workerService.patchWorkDir)
 }
 

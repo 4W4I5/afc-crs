@@ -24,22 +24,22 @@ import (
 
 // WebCRSService implements CRSService for web service mode (task scheduling and distribution)
 type WebCRSService struct {
-	cfg                     *config.Config
-	tasks                   map[string]*models.TaskDetail
-	tasksMutex              sync.RWMutex
-	workDir                 string
-	statusMutex             sync.RWMutex
-	status                  models.StatusTasksState
-	povMetadataDir          string
-	povMetadataDir0         string
-	povAdvcancedMetadataDir string
-	patchWorkDir            string
-	submissionEndpoint      string
-	workerIndex             string
-	analysisServiceUrl      string
-	workerNodes             int
-	workerBasePort          int
-	model                   string
+	cfg                    *config.Config
+	tasks                  map[string]*models.TaskDetail
+	tasksMutex             sync.RWMutex
+	workDir                string
+	statusMutex            sync.RWMutex
+	status                 models.StatusTasksState
+	povMetadataDir         string
+	povMetadataDir0        string
+	povAdvancedMetadataDir string
+	patchWorkDir           string
+	submissionEndpoint     string
+	workerIndex            string
+	analysisServiceUrl     string
+	workerNodes            int
+	workerBasePort         int
+	model                  string
 
 	// Fields for tracking historical task distribution
 	totalTasksDistributed int
@@ -92,23 +92,23 @@ func NewWebService(cfg *config.Config) CRSService {
 	}
 
 	service := &WebCRSService{
-		cfg:                     cfg,
-		tasks:                   make(map[string]*models.TaskDetail),
-		workDir:                 workDir,
-		status:                  models.StatusTasksState{},
-		povMetadataDir:          "successful_povs",
-		povMetadataDir0:         "successful_povs_0",
-		povAdvcancedMetadataDir: "successful_povs_advanced",
-		patchWorkDir:            "patch_workspace",
-		workerNodes:             cfg.Worker.Nodes,
-		workerBasePort:          cfg.Server.WorkerBasePort,
-		model:                   cfg.AI.Model,
-		submissionEndpoint:      submissionEndpoint,
-		analysisServiceUrl:      cfg.Services.AnalysisURL,
-		totalTasksDistributed:   0,
-		workerStatus:            make(map[int]*WorkerStatus),
-		fuzzerToWorkerMap:       make(map[string]int),
-		taskToWorkersMap:        make(map[string][]WorkerFuzzerPair),
+		cfg:                    cfg,
+		tasks:                  make(map[string]*models.TaskDetail),
+		workDir:                workDir,
+		status:                 models.StatusTasksState{},
+		povMetadataDir:         "successful_povs",
+		povMetadataDir0:        "successful_povs_0",
+		povAdvancedMetadataDir: "successful_povs_advanced",
+		patchWorkDir:           "patch_workspace",
+		workerNodes:            cfg.Worker.Nodes,
+		workerBasePort:         cfg.Server.WorkerBasePort,
+		model:                  cfg.AI.Model,
+		submissionEndpoint:     submissionEndpoint,
+		analysisServiceUrl:     cfg.Services.AnalysisURL,
+		totalTasksDistributed:  0,
+		workerStatus:           make(map[int]*WorkerStatus),
+		fuzzerToWorkerMap:      make(map[string]int),
+		taskToWorkersMap:       make(map[string][]WorkerFuzzerPair),
 	}
 
 	// Initialize worker status for each worker
@@ -164,21 +164,6 @@ func (s *WebCRSService) SubmitTask(task models.Task) error {
 
 		// Process task asynchronously
 		go func(td models.TaskDetail) {
-			if !td.HarnessesIncluded && isDeltaTask(td) {
-				log.Printf("Task %s is delta and has no harnesses; dispatching UNHARNESSED generation flow", td.TaskID)
-				allFuzzers := []string{UNHARNESSED}
-				s.distributeFuzzers(allFuzzers, td, task)
-				return
-			}
-
-			if !td.HarnessesIncluded {
-				log.Printf(
-					"Task %s has no harnesses but type=%s; unharnessed auto-generation is disabled outside delta mode",
-					td.TaskID,
-					td.Type,
-				)
-			}
-
 			if err := s.processTask("", td, task); err != nil {
 				log.Printf("Error processing task %s: %v", td.TaskID, err)
 
@@ -426,8 +411,7 @@ func (s *WebCRSService) processTask(myFuzzer string, taskDetail models.TaskDetai
 	}
 
 	if len(allFuzzers) == 0 {
-		log.Printf("No fuzzers found after building all sanitizers")
-		return nil
+		return fmt.Errorf("no fuzzers found after building all sanitizers for project %s", taskDetail.ProjectName)
 	}
 
 	// Filter fuzzers
@@ -442,10 +426,16 @@ func (s *WebCRSService) processTask(myFuzzer string, taskDetail models.TaskDetai
 		allFuzzers = helpers.SortFuzzersByGroup(allFilteredFuzzers)
 	}
 
-	log.Printf("Found %d fuzzers: %v", len(allFuzzers), allFuzzers)
+	if len(allFuzzers) == 0 {
+		return fmt.Errorf("no fuzzers left after sanitizer filtering for project %s", taskDetail.ProjectName)
+	}
 
-	// Distribute fuzzers to workers
-	s.distributeFuzzers(allFuzzers, taskDetail, fullTask)
+	log.Printf("Found %d fuzzers: %v", len(allFuzzers), allFuzzers)
+	contextFuzzer := allFuzzers[0]
+	log.Printf("Using context fuzzer path for worker-side LLM harness generation: %s", contextFuzzer)
+
+	// Distribute only a context path. Workers always generate and execute a fresh LLM harness.
+	s.distributeFuzzers([]string{contextFuzzer}, taskDetail, fullTask)
 
 	// Update task state to succeeded
 	s.tasksMutex.Lock()

@@ -2,9 +2,12 @@ package services
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -35,10 +38,10 @@ type baseService struct {
 	model              string
 
 	// POV metadata directories (used by Local and Worker services)
-	povMetadataDir          string
-	povMetadataDir0         string
-	povAdvcancedMetadataDir string
-	patchWorkDir            string
+	povMetadataDir         string
+	povMetadataDir0        string
+	povAdvancedMetadataDir string
+	patchWorkDir           string
 }
 
 // GetWorkDir returns the working directory path
@@ -103,6 +106,7 @@ func initializeWorkDir() string {
 
 	return workDir
 }
+
 // ============================================================================
 // Shared Types (migrated from crs_services.go)
 // ============================================================================
@@ -164,7 +168,7 @@ type CRSService interface {
 // ============================================================================
 
 const (
-	UNHARNESSED = "UNHARNESSED"
+	UNHARNESSED = models.UnharnessedFuzzer
 )
 
 // ============================================================================
@@ -278,6 +282,85 @@ func commandOutputTail(out string, maxLines int) string {
 		return strings.Join(lines, "\n")
 	}
 	return strings.Join(lines[len(lines)-maxLines:], "\n")
+}
+
+type concurrentBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *concurrentBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *concurrentBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type prefixedLineLogger struct {
+	mu      sync.Mutex
+	prefix  string
+	pending string
+}
+
+func (w *prefixedLineLogger) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	chunk := w.pending + string(p)
+	lines := strings.Split(chunk, "\n")
+	for _, line := range lines[:len(lines)-1] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		log.Printf("[%s] %s", w.prefix, line)
+	}
+	w.pending = lines[len(lines)-1]
+
+	return len(p), nil
+}
+
+func (w *prefixedLineLogger) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if strings.TrimSpace(w.pending) != "" {
+		log.Printf("[%s] %s", w.prefix, w.pending)
+	}
+	w.pending = ""
+}
+
+func runCommandAndCaptureAndStreamOutput(cmd *exec.Cmd, commandDesc string) (string, error) {
+	stdoutBuf := &concurrentBuffer{}
+	stderrBuf := &concurrentBuffer{}
+
+	stdoutLog := &prefixedLineLogger{prefix: commandDesc + " stdout"}
+	stderrLog := &prefixedLineLogger{prefix: commandDesc + " stderr"}
+
+	cmd.Stdout = io.MultiWriter(stdoutBuf, stdoutLog)
+	cmd.Stderr = io.MultiWriter(stderrBuf, stderrLog)
+
+	err := cmd.Run()
+	stdoutLog.Flush()
+	stderrLog.Flush()
+
+	combined := stdoutBuf.String()
+	stderrText := stderrBuf.String()
+	if stderrText != "" {
+		if combined != "" && !strings.HasSuffix(combined, "\n") {
+			combined += "\n"
+		}
+		combined += stderrText
+	}
+
+	if err != nil {
+		return combined, fmt.Errorf("%s failed: %w", commandDesc, err)
+	}
+
+	return combined, nil
 }
 
 func resolveGenerateFuzzerScriptPath(taskDir string) (string, error) {
@@ -397,6 +480,53 @@ func parseGeneratedFuzzerPathsLegacy(output string) (string, string, error) {
 	return srcPath, binaryPath, nil
 }
 
+func validateGeneratedFuzzerArtifacts(sourcePath, binaryPath string) error {
+	binStat, err := os.Stat(binaryPath)
+	if err != nil {
+		return fmt.Errorf("generated binary stat failed: %w", err)
+	}
+	if binStat.IsDir() {
+		return fmt.Errorf("generated binary path is a directory: %s", binaryPath)
+	}
+	if binStat.Mode()&0o111 == 0 {
+		return fmt.Errorf("generated binary is not executable: %s", binaryPath)
+	}
+
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to read generated source: %w", err)
+	}
+
+	requiredEntrypoint := "LLVMFuzzerTestOneInput"
+	if strings.EqualFold(filepath.Ext(sourcePath), ".java") {
+		requiredEntrypoint = "fuzzerTestOneInput"
+	}
+	if !strings.Contains(string(sourceBytes), requiredEntrypoint) {
+		return fmt.Errorf("generated source missing required entrypoint %q", requiredEntrypoint)
+	}
+
+	if strings.EqualFold(filepath.Ext(sourcePath), ".java") {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "-help=1")
+	cmd.Env = append(os.Environ(), "ASAN_OPTIONS=abort_on_error=1:symbolize=0")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("generated binary smoke run timed out")
+		}
+		return fmt.Errorf("generated binary smoke run failed: %w", err)
+	}
+
+	return nil
+}
+
 // ============================================================================
 // Unharnessed Task Functions (temporary stubs - need full migration)
 // ============================================================================
@@ -480,9 +610,15 @@ func cloneOssFuzzAndMainRepoOnce(taskDir, projectName, sanitizerDir string) erro
 }
 
 // generateFuzzerForUnharnessedTask - TODO: migrate full implementation from deleted crs_services.go
-func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName, sanitizer string) (string, string, error) {
-	if err := ensureDeltaDiffReady(taskDir); err != nil {
-		return "", "", err
+func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName, sanitizer string, taskType models.TaskType) (string, string, error) {
+	sourceMode := "full"
+	diffPath := ""
+	if taskType == models.TaskTypeDelta {
+		if err := ensureDeltaDiffReady(taskDir); err != nil {
+			return "", "", err
+		}
+		sourceMode = "diff"
+		diffPath = filepath.Join(taskDir, "diff", "ref.diff")
 	}
 
 	scriptPath, err := resolveGenerateFuzzerScriptPath(taskDir)
@@ -491,8 +627,8 @@ func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName,
 	}
 
 	pythonInterpreter := pickPythonInterpreter()
-	cmd := exec.Command(
-		pythonInterpreter,
+	cmdArgs := []string{
+		"-u",
 		scriptPath,
 		"--task_dir", taskDir,
 		"--focus", focus,
@@ -500,14 +636,18 @@ func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName,
 		"--project_name", projectName,
 		"--sanitizer", sanitizer,
 		"--output-format", "json",
-		"--source-mode", "diff",
-		"--diff-path", filepath.Join(taskDir, "diff", "ref.diff"),
-	)
+		"--source-mode", sourceMode,
+	}
+	if diffPath != "" {
+		cmdArgs = append(cmdArgs, "--diff-path", diffPath)
+	}
+	cmd := exec.Command(pythonInterpreter, cmdArgs...)
 	cmd.Dir = taskDir
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	log.Printf(
-		"Running unharnessed fuzzer generator: %s --task_dir %s --focus %s --sanitizer_dir %s --project_name %s --sanitizer %s",
+		"Running unharnessed fuzzer generator (%s mode): %s --task_dir %s --focus %s --sanitizer_dir %s --project_name %s --sanitizer %s",
+		sourceMode,
 		pythonInterpreter,
 		taskDir,
 		focus,
@@ -515,9 +655,9 @@ func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName,
 		projectName,
 		sanitizer,
 	)
+	log.Printf("Streaming live generator output (stdout/stderr) for troubleshooting")
 
-	outBytes, err := cmd.CombinedOutput()
-	out := string(outBytes)
+	out, err := runCommandAndCaptureAndStreamOutput(cmd, "generate-fuzzer")
 	if err != nil {
 		return "", "", fmt.Errorf(
 			"generate_fuzzer.py failed: %w\nOutput tail:\n%s",
@@ -533,6 +673,10 @@ func generateFuzzerForUnharnessedTask(taskDir, focus, sanitizerDir, projectName,
 			parseErr,
 			commandOutputTail(out, 30),
 		)
+	}
+
+	if validationErr := validateGeneratedFuzzerArtifacts(newFuzzerSrcPath, newFuzzerBinaryPath); validationErr != nil {
+		return "", "", fmt.Errorf("generated fuzzer validation failed: %w", validationErr)
 	}
 
 	log.Printf("Generated unharnessed fuzzer source: %s", newFuzzerSrcPath)

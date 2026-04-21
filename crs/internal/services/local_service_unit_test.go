@@ -87,7 +87,8 @@ func TestSubmitLocalTaskMissingFuzzers(t *testing.T) {
 
 	service := NewLocalService(newTestConfig()).(*LocalCRSService)
 
-	// Should succeed even if no fuzzers are present (early return)
+	// Should fail-fast when workspace is missing required fuzz-tooling assets.
 	err := service.SubmitLocalTask(taskDir)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "fuzz-tooling")
 }
