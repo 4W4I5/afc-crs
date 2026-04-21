@@ -20,7 +20,7 @@ clang>=14.0
 
 # Environment
 python-dotenv>=1.0.0
-setuptools>=68.0.0
+setuptools>=68.0.0,<81.0.0
 
 # HTTP client used by jeff strategies
 requests>=2.31.0

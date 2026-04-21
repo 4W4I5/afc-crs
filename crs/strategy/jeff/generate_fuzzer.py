@@ -65,6 +65,182 @@ MODELS = [CLAUDE_MODEL, OPENAI_MODEL, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25]
 CLAUDE_MODEL_SONNET_45 = "claude-sonnet-4.6"
 CLAUDE_MODEL_OPUS_4 = "claude-opus-4.6"
 MODELS = [CLAUDE_MODEL_OPUS_4, CLAUDE_MODEL, OPENAI_MODEL, OPENAI_MODEL_O3, GEMINI_MODEL_PRO_25]
+DEFAULT_MAX_COMPLETION_TOKENS = int(os.environ.get("LLM_MAX_COMPLETION_TOKENS", "4096"))
+DEFAULT_DOCKER_PULL_TIMEOUT_SECONDS = int(os.environ.get("DOCKER_PULL_TIMEOUT_SECONDS", "300"))
+DEFAULT_DOCKER_BUILD_TIMEOUT_SECONDS = int(os.environ.get("DOCKER_BUILD_TIMEOUT_SECONDS", "1800"))
+
+COPILOT_API_BASE_URL = os.environ.get("COPILOT_API_BASE_URL", "").strip()
+if not COPILOT_API_BASE_URL:
+    COPILOT_API_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").strip()
+if not COPILOT_API_BASE_URL:
+    COPILOT_API_BASE_URL = os.environ.get("OPENAI_API_BASE", "").strip()
+
+
+def _normalize_api_base(url: str) -> str:
+    if not url:
+        return ""
+    base = url.rstrip("/")
+    if base.endswith("/v1"):
+        return base
+    return f"{base}/v1"
+
+
+PROXY_API_BASE = _normalize_api_base(COPILOT_API_BASE_URL)
+
+
+def _build_litellm_request(requested_model: str):
+    lower_model = requested_model.lower()
+
+    # When a proxy is configured, route all chat models through OpenAI-compatible endpoint.
+    if PROXY_API_BASE:
+        proxy_model = requested_model
+        if lower_model.startswith("gpt-5"):
+            # Some OpenAI-compatible routers reject GPT-5 chat requests with max_tokens semantics.
+            # Fall back to a broadly supported chat model unless explicitly overridden.
+            proxy_model = os.environ.get("OPENAI_PROXY_GPT5_FALLBACK_MODEL", "gpt-4o-2024-11-20")
+        return (
+            f"openai/{proxy_model}",
+            {
+                "api_base": PROXY_API_BASE,
+                "api_key": os.environ.get("OPENAI_API_KEY") or "dummy",
+            },
+        )
+
+    if "/" in requested_model:
+        return requested_model, {}
+
+    if lower_model.startswith("claude"):
+        return f"anthropic/{requested_model}", {}
+    if lower_model.startswith("gpt"):
+        return f"openai/{requested_model}", {}
+    if lower_model.startswith("grok"):
+        return f"xai/{requested_model}", {}
+
+    return requested_model, {}
+
+
+def _build_litellm_completion_kwargs(requested_model: str):
+    """Build completion kwargs with compatibility for newer OpenAI model families."""
+    lower_model = requested_model.lower()
+
+    kwargs = {
+        "temperature": 1.0,
+        "timeout": 900,
+        # Drop unsupported params when routing across mixed providers/proxies.
+        "drop_params": True,
+    }
+
+    if lower_model.startswith("gpt-5") or lower_model.startswith("o1") or lower_model.startswith("o3"):
+        kwargs["max_completion_tokens"] = DEFAULT_MAX_COMPLETION_TOKENS
+
+    return kwargs
+
+
+def _docker_image_exists(image_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _pull_docker_image(log_file: str, image_name: str) -> bool:
+    log_message(log_file, f"Attempting to pull Docker image: {image_name}")
+    try:
+        result = subprocess.run(
+            ["docker", "pull", image_name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_DOCKER_PULL_TIMEOUT_SECONDS,
+        )
+        if result.returncode == 0:
+            log_message(log_file, f"Successfully pulled Docker image: {image_name}")
+            return True
+
+        log_message(log_file, f"Failed to pull Docker image {image_name} (code={result.returncode})")
+        log_message(log_file, f"Pull stderr tail: {(result.stderr or '')[-1200:]}")
+        return False
+    except subprocess.TimeoutExpired:
+        log_message(log_file, f"Timed out pulling Docker image {image_name}")
+        return False
+    except Exception as e:
+        log_message(log_file, f"Unexpected error pulling Docker image {image_name}: {str(e)}")
+        return False
+
+
+def _build_local_project_image(log_file: str, task_dir: str, project_name: str, image_name: str) -> bool:
+    dockerfile_path = os.path.join(task_dir, "fuzz-tooling", "projects", project_name, "Dockerfile")
+    build_context_path = os.path.join(task_dir, "fuzz-tooling", "projects", project_name)
+
+    if not os.path.exists(dockerfile_path):
+        log_message(log_file, f"Cannot build image {image_name}: Dockerfile missing at {dockerfile_path}")
+        return False
+
+    if not os.path.isdir(build_context_path):
+        log_message(log_file, f"Cannot build image {image_name}: build context missing at {build_context_path}")
+        return False
+
+    build_cmd = [
+        "docker", "build",
+        "--platform", "linux/amd64",
+        "-t", image_name,
+        "-f", dockerfile_path,
+        build_context_path,
+    ]
+    log_message(log_file, f"Attempting to build local Docker image: {' '.join(build_cmd)}")
+
+    try:
+        result = subprocess.run(
+            build_cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_DOCKER_BUILD_TIMEOUT_SECONDS,
+        )
+        if result.returncode == 0:
+            log_message(log_file, f"Successfully built local Docker image: {image_name}")
+            return True
+
+        log_message(log_file, f"Failed to build local Docker image {image_name} (code={result.returncode})")
+        log_message(log_file, f"Build stderr tail: {(result.stderr or '')[-2000:]}")
+        return False
+    except subprocess.TimeoutExpired:
+        log_message(log_file, f"Timed out building local Docker image {image_name}")
+        return False
+    except Exception as e:
+        log_message(log_file, f"Unexpected error building local Docker image {image_name}: {str(e)}")
+        return False
+
+
+def resolve_runtime_docker_image(log_file: str, task_dir: str, project_name: str) -> Tuple[str, str]:
+    """Resolve a runnable Docker image for fuzzer compile runs."""
+    primary_image = f"aixcc-afc/{project_name}"
+    public_image = f"gcr.io/oss-fuzz/{project_name}"
+
+    if _docker_image_exists(primary_image):
+        return primary_image, ""
+
+    log_message(log_file, f"Local image not found: {primary_image}; attempting local build")
+    if _build_local_project_image(log_file, task_dir, project_name, primary_image):
+        return primary_image, ""
+
+    if _docker_image_exists(public_image):
+        log_message(log_file, f"Using existing public OSS-Fuzz image: {public_image}")
+        return public_image, ""
+
+    if _pull_docker_image(log_file, public_image):
+        return public_image, ""
+
+    return "", (
+        f"Could not resolve runtime Docker image for project '{project_name}'. "
+        f"Tried local tag '{primary_image}' (including local build) and public tag '{public_image}'."
+    )
 
 def get_fallback_model(current_model, tried_models):
     """Get a fallback model that hasn't been tried yet"""
@@ -188,11 +364,102 @@ def parse_diff_get_changed_files(diff_path):
     # de-dup while preserving order
     return list(dict.fromkeys(changed))
 
+
+def parse_changed_files_from_diff_content(diff_content):
+    """Return changed source files extracted from unified diff content."""
+    changed = []
+    diff_re = re.compile(r'^\+\+\+\s+b?/(.+)')
+    git_re = re.compile(r'^diff --git a/(.+?) b/(.+)$')
+    for line in diff_content.splitlines():
+        m_diff = diff_re.match(line)
+        if m_diff:
+            changed.append(m_diff.group(1).strip())
+            continue
+
+        m_git = git_re.match(line)
+        if m_git:
+            changed.append(m_git.group(2).strip())
+
+    return list(dict.fromkeys(changed))
+
+
+def resolve_supplemental_vuln_diff_path(args):
+    """Resolve an optional vulnerability-focused diff path for extra prompt guidance."""
+    candidates = []
+    if getattr(args, "vuln_diff_path", ""):
+        candidates.append(args.vuln_diff_path)
+
+    env_candidate = os.environ.get("CRS_VULN_DIFF_PATH", "").strip()
+    if env_candidate:
+        candidates.append(env_candidate)
+
+    candidates.append(os.path.join(args.task_dir, "diff", "vuln.diff"))
+    candidates.append(os.path.join(args.task_dir, "vuln.diff"))
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_abs = os.path.abspath(candidate)
+        if candidate_abs in seen:
+            continue
+        seen.add(candidate_abs)
+        if os.path.exists(candidate_abs):
+            return candidate_abs
+
+    return ""
+
+
+def build_vulnerability_guidance(diff_content):
+    """Build concise exploit-oriented guidance for attacking base-commit behavior."""
+    if not diff_content or not diff_content.strip():
+        return ""
+
+    lower = diff_content.lower()
+    changed_files = parse_changed_files_from_diff_content(diff_content)
+    guidance = []
+
+    if "safemath" in lower or "expectedsizesafe.mul" in lower:
+        guidance.append(
+            "Integer-overflow hardening is present around entry-table sizing. "
+            "Craft media metadata where NumberOfImages makes kMPEntrySize * numberOfImages overflow/truncate on base."
+        )
+    if "sharesubset" in lower and "if (!mpentry)" in lower:
+        guidance.append(
+            "Bounds/null hardening was added for MP entry slicing. "
+            "Use truncated MP entry regions so per-entry reads on base can step outside valid backing storage."
+        )
+    if "mpentriesdata->bytes() + kmpentrysize * i" in lower:
+        guidance.append(
+            "Direct pointer arithmetic over MP entry tables existed in base. "
+            "Generate mismatched table-length vs image-count metadata to stress OOB reads during entry iteration."
+        )
+    if "skjpegmultipictureparameters::make" in diff_content:
+        guidance.append(
+            "Target SkJpegMultiPictureParameters::Make by mutating MPF indexes, offsets, and image counts to maximize parser inconsistency."
+        )
+
+    if not guidance:
+        guidance.append(
+            "Treat newly added checks as clues for what base lacked. Generate malformed structured inputs that violate those checks."
+        )
+
+    changed_files_text = ", ".join(changed_files[:6]) if changed_files else "unknown"
+    guidance_lines = [
+        f"- Changed files of interest: {changed_files_text}",
+        "- Use these hardening clues to craft inputs that break base-commit assumptions:",
+    ]
+    guidance_lines.extend([f"  - {item}" for item in guidance])
+
+    return "\n".join(guidance_lines)
+
 def find_fuzzers(root_dir):
     patterns = [
         ("java", "fuzzerTestOneInput"),
         ("c",    "LLVMFuzzerTestOneInput"),
         ("cc",   "LLVMFuzzerTestOneInput"),
+        ("cpp",  "LLVMFuzzerTestOneInput"),
+        ("cxx",  "LLVMFuzzerTestOneInput"),
     ]
     fuzzers = []
     for ext, token in patterns:
@@ -470,12 +737,17 @@ def call_litellm(log_file, messages, model_name) -> (str, bool):
         try:
             if attempt > 0:
                 log_message(log_file, f"Retry attempt {attempt+1}/{max_retries} using model {current_model}...")
+
+            litellm_model, litellm_kwargs = _build_litellm_request(current_model)
+            if PROXY_API_BASE and current_model.lower().startswith("gpt-5") and litellm_model != f"openai/{current_model}":
+                log_message(log_file, f"Remapped {current_model} to proxy-compatible model {litellm_model.split('/', 1)[-1]}")
+            completion_kwargs = _build_litellm_completion_kwargs(current_model)
             
             response = completion(
-                model=current_model,
+                model=litellm_model,
                 messages=messages,
-                temperature=1.0,
-                timeout=900
+                **completion_kwargs,
+                **litellm_kwargs,
             )
             
             end_time = time.time()
@@ -581,6 +853,13 @@ def call_o1_pro_api(log_file, messages, model_name):
         "model": model_name,
         "input": user_message
     }
+
+    openai_api_base = _normalize_api_base(
+        os.environ.get("OPENAI_BASE_URL", "").strip()
+        or os.environ.get("OPENAI_API_BASE", "").strip()
+    )
+    responses_endpoint = f"{openai_api_base}/responses" if openai_api_base else "https://api.openai.com/v1/responses"
+
     # Retry parameters
     max_retries = 5
     base_delay = 2  # Start with 2 seconds
@@ -591,7 +870,7 @@ def call_o1_pro_api(log_file, messages, model_name):
                 log_message(log_file, f"Retry attempt {attempt+1}/{max_retries}...")
             
             response = requests.post(
-                "https://api.openai.com/v1/responses",
+                responses_endpoint,
                 headers=headers,
                 json=data,
                 timeout=900
@@ -663,9 +942,9 @@ def call_o1_pro_api(log_file, messages, model_name):
 def call_llm(log_file, messages, model_name):
     """Call LLM with telemetry tracking."""    
     try:
-        if model_name.startswith("gemini"):
+        if model_name.startswith("gemini") and not PROXY_API_BASE:
             response = call_gemini_api(log_file, messages, model_name)
-        elif model_name == OPENAI_MODEL_O1_PRO:
+        elif model_name == OPENAI_MODEL_O1_PRO and not PROXY_API_BASE:
             response = call_o1_pro_api(log_file, messages, model_name)
         else:
             response = call_litellm(log_file, messages, model_name)
@@ -677,7 +956,7 @@ def call_llm(log_file, messages, model_name):
         return "", False
 
 
-def construct_generate_new_fuzzer_prompt(existing_fuzzers, new_fuzzer_name, diff_content):
+def construct_generate_new_fuzzer_prompt(existing_fuzzers, new_fuzzer_name, diff_content, vuln_guidance=""):
     """
     Construct the instruction prompt for the LLM to generate a new fuzzer harness.
     """
@@ -705,6 +984,7 @@ def construct_generate_new_fuzzer_prompt(existing_fuzzers, new_fuzzer_name, diff
         fuzzer_sections.append(f"# File: {path}\n{block}")
 
     existing_section = "\n\n".join(fuzzer_sections)
+    vuln_guidance_section = vuln_guidance or "- No additional vulnerability guidance provided."
 
     prompt = f"""
 You are an expert security researcher and fuzzer development specialist. Your task is to generate a new, high-quality fuzzer harness.
@@ -725,10 +1005,14 @@ You are an expert security researcher and fuzzer development specialist. Your ta
     {diff_content}
     ```
 
+3.  **Vulnerability-focused hints for attacking the base commit behavior (derived from hardening lines):**
+    {vuln_guidance_section}
+
 **Instructions for Fuzzer Generation:**
 
 1.  **Analyze the Diff:** Thoroughly examine the provided `diff`. Identify the modified or newly added functions, data structures, and logic. Pay close attention to areas that handle external input, memory allocation/deallocation, pointers, array indexing, complex calculations, or concurrent operations, as these are common sources of vulnerabilities.
 2.  **Focus on Vulnerability Triggers:** The new fuzzer `{new_fuzzer_name}` must be crafted to exercise the changed code paths in a way that is likely to reveal security flaws. Think about how an attacker might try to exploit the changes.
+2a. **Attack the base commit assumptions:** If the diff adds bounds checks, safe arithmetic, or null checks, treat those as clues for what the base likely lacked. Generate inputs that violate those assumptions.
 3.  **Input Generation:** The fuzzer should generate diverse and potentially malformed inputs that target the interfaces of the changed functions. Consider edge cases, oversized inputs, out-of-bounds values, and sequences of operations that might stress the new or modified logic.
 4.  **Leverage Existing Fuzzer Structure (If Applicable):** If the target project has a common structure for fuzzers (evident from "Existing Fuzzers"), try to adhere to that for the new fuzzer's boilerplate (e.g., includes, main fuzzer entry point like `LLVMFuzzerTestOneInput` or `fuzzerTestOneInput`). However, the core fuzzing logic *must* be tailored to the diff.
 5.  **No Trivial Fuzzers:** Do not generate a fuzzer that only calls a function with default or obviously safe inputs. The fuzzer must actively attempt to find bugs.
@@ -821,6 +1105,59 @@ def extract_fuzzer_source_from_response(response):
         # Fallback: return the whole response, stripped
         return response.strip()
 
+
+def _inject_ninja_fallback_for_skia(log_file, build_sh_content):
+    """Patch Skia build scripts to use PATH ninja when vendored ninja is absent."""
+    legacy_ninja_path = "$SRC/skia/third_party/ninja/ninja"
+    if legacy_ninja_path not in build_sh_content:
+        return build_sh_content
+
+    patched_content = build_sh_content
+
+    if "NINJA_BIN=" not in patched_content:
+        ninja_resolver_block = (
+            "\n"
+            "SKIA_SRC_DIR=\"${SRC:-/src}/skia\"\n"
+            "if [ ! -x \"${SKIA_SRC_DIR}/third_party/ninja/ninja\" ] && [ -d \"${SKIA_SRC_DIR}\" ]; then\n"
+            "  echo \"Skia vendored ninja missing; attempting dependency sync via depot_tools\"\n"
+            "  if [ -x /src/depot_tools/gclient ] && [ -f \"${SKIA_SRC_DIR}/tools/git-sync-deps\" ]; then\n"
+            "    pushd \"${SKIA_SRC_DIR}\" >/dev/null\n"
+            "    PATH=\"/src/depot_tools:${PATH}\" python3 tools/git-sync-deps || true\n"
+            "    if [ ! -x \"${SKIA_SRC_DIR}/third_party/ninja/ninja\" ] && [ -f \"${SKIA_SRC_DIR}/bin/fetch-ninja\" ]; then\n"
+            "      echo \"Skia ninja still missing after git-sync-deps; fetching ninja package\"\n"
+            "      PATH=\"/src/depot_tools:${PATH}\" python3 bin/fetch-ninja || true\n"
+            "    fi\n"
+            "    popd >/dev/null\n"
+            "  fi\n"
+            "fi\n"
+            "# Prefer a real ninja binary; avoid depot_tools wrapper scripts.\n"
+            "NINJA_FROM_PATH=\"$(command -v ninja 2>/dev/null || true)\"\n"
+            "if command -v ninja-build >/dev/null 2>&1; then\n"
+            "  NINJA_BIN=\"$(command -v ninja-build)\"\n"
+            "elif [ -n \"${NINJA_FROM_PATH}\" ] && [[ \"${NINJA_FROM_PATH}\" != *\"/depot_tools/ninja\"* ]]; then\n"
+            "  NINJA_BIN=\"${NINJA_FROM_PATH}\"\n"
+            "elif [ -x /usr/bin/ninja ]; then\n"
+            "  NINJA_BIN=\"/usr/bin/ninja\"\n"
+            "elif [ -x /bin/ninja ]; then\n"
+            "  NINJA_BIN=\"/bin/ninja\"\n"
+            "else\n"
+            "  NINJA_BIN=\"${SRC:-/src}/skia/third_party/ninja/ninja\"\n"
+            "fi\n"
+        )
+
+        shebang = "#!/bin/bash -eu\n"
+        if patched_content.startswith(shebang):
+            patched_content = shebang + ninja_resolver_block + patched_content[len(shebang):]
+        else:
+            patched_content = ninja_resolver_block + patched_content
+        log_message(log_file, "Injected ninja fallback resolver into build.sh")
+
+    # Replace both quoted and unquoted usages.
+    patched_content = patched_content.replace('"$SRC/skia/third_party/ninja/ninja"', '"${NINJA_BIN}"')
+    patched_content = patched_content.replace(legacy_ninja_path, "${NINJA_BIN}")
+
+    return patched_content
+
 def fix_build_script_if_necessary(log_file, oss_fuzz_project_dir, fuzz_tooling_project_dir, 
                                    fuzzer_src_dir0, fuzzer_src_dir, main_repo_dir, 
                                    fuzzer_file_name, new_fuzzer_file_name):
@@ -890,6 +1227,7 @@ def fix_build_script_if_necessary(log_file, oss_fuzz_project_dir, fuzz_tooling_p
         log_message(log_file, f"New fuzzer name (for build.sh replacement): {new_fuzzer_name_for_build_sh}")
         
         modified_build_sh_content = build_sh_content.replace(fuzzer_name_for_build_sh, new_fuzzer_name_for_build_sh)
+        modified_build_sh_content = _inject_ninja_fallback_for_skia(log_file, modified_build_sh_content)
 
         os.makedirs(os.path.dirname(target_build_sh_path), exist_ok=True)
         with open(target_build_sh_path, "w", encoding="utf-8") as f:
@@ -986,6 +1324,7 @@ def _try_fetch_sources_via_docker_build(log_file, task_dir, project_name, target
             "--output", f"type=local,dest={temp_export_dir}",
             build_context_path
         ]
+        build_timeout_seconds = 180
         
         env = os.environ.copy()
         log_message(log_file, f"Running Docker build command: {' '.join(docker_build_cmd)}")
@@ -997,7 +1336,7 @@ def _try_fetch_sources_via_docker_build(log_file, task_dir, project_name, target
                 capture_output=True, # stdout and stderr will be bytes
                 text=False,          # Process as bytes to reduce overhead
                 check=False,
-                timeout=180 # Added timeout
+                timeout=build_timeout_seconds
             )
             
             # Decode output for logging, showing only the tail end to keep logs manageable
@@ -1084,6 +1423,7 @@ def main():
     ap.add_argument('--output-format', choices=['legacy', 'json'], default='legacy')
     ap.add_argument('--source-mode', choices=['diff', 'full'], default='diff')
     ap.add_argument('--diff-path', default='')
+    ap.add_argument('--vuln-diff-path', default='')
 
     args = ap.parse_args()
     project_name = args.project_name
@@ -1283,6 +1623,8 @@ def main():
     # analyze diff for delta scan
     # ------------------------------------------------------------------
     diff_content = ""
+    vuln_diff_content = ""
+    vuln_guidance = ""
     diff_path = args.diff_path or os.path.join(args.task_dir, "diff", "ref.diff")
     if args.source_mode == "diff":
         if os.path.exists(diff_path):
@@ -1299,17 +1641,55 @@ def main():
                 log_message(log_file, f"Error reading diff file: {str(e)}")
         else:
             log_message(log_file, f"Diff mode requested but diff not found at {diff_path}; falling back to full source prompt")
+
+        supplemental_vuln_diff_path = resolve_supplemental_vuln_diff_path(args)
+        if supplemental_vuln_diff_path:
+            try:
+                with open(supplemental_vuln_diff_path, "r", encoding="utf-8", errors="ignore") as vf:
+                    vuln_diff_content = vf.read()
+                log_message(
+                    log_file,
+                    f"Loaded supplemental vulnerability diff from {supplemental_vuln_diff_path}, len(vuln_diff_content): {len(vuln_diff_content)}",
+                )
+                if vuln_diff_content and os.path.abspath(supplemental_vuln_diff_path) != os.path.abspath(diff_path):
+                    diff_content = (
+                        f"{diff_content}\n\n"
+                        f"# Supplemental vulnerability-focused diff context\n"
+                        f"{vuln_diff_content}"
+                    ) if diff_content else vuln_diff_content
+            except Exception as e:
+                log_message(log_file, f"Error reading supplemental vuln diff file: {str(e)}")
+        else:
+            log_message(log_file, "No supplemental vulnerability diff found for this task")
+
+        vuln_guidance = build_vulnerability_guidance(vuln_diff_content or diff_content)
+        if vuln_guidance:
+            log_message(log_file, f"Derived vulnerability guidance for base-targeted harness crafting:\n{vuln_guidance}")
     else:
         log_message(log_file, "Full source mode requested; skipping diff analysis")
 
     # construct prompt to generate a new fuzzer
     if diff_content:
-        prompt = construct_generate_new_fuzzer_prompt(existing_fuzzers, new_fuzzer_name, diff_content)
+        prompt = construct_generate_new_fuzzer_prompt(existing_fuzzers, new_fuzzer_name, diff_content, vuln_guidance)
     else:
         prompt = construct_generate_new_fuzzer_prompt_full(existing_fuzzers, new_fuzzer_name, project_name)
 
     messages = [{"role": "system", "content": "You are a top expert in fuzzing code security vulnerabilities."}]
     messages.append({"role": "user", "content": prompt})
+
+    runtime_image, image_resolution_error = resolve_runtime_docker_image(log_file, args.task_dir, project_name)
+    if image_resolution_error:
+        log_message(log_file, image_resolution_error)
+        emit_generator_failure(
+            reason="missing_build_image",
+            message=image_resolution_error,
+            output_format=output_format,
+            diagnostics=image_resolution_error,
+            log_file=log_file,
+        )
+        sys.exit(1)
+
+    log_message(log_file, f"Using Docker runtime image for harness build validation: {runtime_image}")
 
     # build the new fuzzer & retry logic
     build_error = ""
@@ -1377,7 +1757,7 @@ def main():
                     "-v", f"{project_src_dir}:/src/{project_name}",
                     "-v", f"{out_dir}:/out",
                     "-v", f"{host_temp_modified_build_sh_path}:{container_build_sh_path}",
-                    f"aixcc-afc/{project_name}"
+                    runtime_image,
                 ]
                 # Convert array to string with proper escaping
                 cmd_string = " ".join([arg if " " not in arg else f'"{arg}"' for arg in cmd_args])
@@ -1399,6 +1779,28 @@ def main():
                     if result.returncode != 0:
                         err_msg = f"Build failed for {sanitizer} sanitizer: {result.stderr}"
                         log_message(log_file, err_msg)
+
+                        infra_markers = [
+                            "unable to find image",
+                            "pull access denied",
+                            "cannot connect to the docker daemon",
+                            "permission denied while trying to connect to the docker daemon",
+                            "cmake error: cmake_c_compiler not set",
+                            "cmake error: cmake_cxx_compiler not set",
+                            "cmake error: cmake_asm_compiler not set",
+                            "cmake_make_program",
+                        ]
+                        lower_stderr = (result.stderr or "").lower()
+                        if any(marker in lower_stderr for marker in infra_markers):
+                            emit_generator_failure(
+                                reason="docker_build_environment_error",
+                                message="Docker runtime environment is not ready for harness build validation.",
+                                output_format=output_format,
+                                diagnostics=truncate_output(err_msg, 2000),
+                                log_file=log_file,
+                            )
+                            sys.exit(1)
+
                         messages.append({"role": "assistant", "content": response})
                         messages.append({"role": "user", "content": truncate_output(err_msg, 200)})
                         build_error += f"\n{sanitizer} build error: {result.stderr}"
