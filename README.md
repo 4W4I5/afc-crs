@@ -56,11 +56,17 @@ XAI_API_KEY=xai-your-key-here
 ### 3. Run a Scan
 
 ```bash
-# Delta Scan - analyze changes between commits
+# Delta Scan - analyze BASE..DELTA diff while executing BASE commit (unpatched)
 ./FuzzingBrain.sh -b <base_commit> -d <delta_commit> <repo_url>
+
+# Delta Scan (POV-only) - skip patch generation, focus on ASAN/POV evidence
+./FuzzingBrain.sh --pov-only -b <base_commit> -d <delta_commit> <repo_url>
 
 # Delta Scan + OSS-Fuzz bootstrap (opt-in)
 ./FuzzingBrain.sh --with-oss-fuzz -b <base_commit> -d <delta_commit> <repo_url>
+
+# Delta Scan + OSS-Fuzz bootstrap + POV-only
+./FuzzingBrain.sh --with-oss-fuzz --pov-only -b <base_commit> -d <delta_commit> <repo_url>
 
 # Full Scan - analyze entire repository
 ./FuzzingBrain.sh <repo_url>

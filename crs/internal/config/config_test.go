@@ -13,6 +13,7 @@ func clearEnv() {
 		"WORKER_NODES", "WORKER_PORT", "WORKER_INDEX", "POD_NAME", "WEB_SERVICE_URL",
 		"SUBMISSION_SERVICE", "ANALYSIS_SERVICE",
 		"AI_MODEL", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY",
+		"STRATEGY_ENABLE_PATCHING",
 		"LOCAL_TEST", "ANALYSIS_SERVICE_TEST", "SUBMISSION_SERVICE_TEST",
 	}
 	for _, v := range envVars {
@@ -64,6 +65,10 @@ func TestLoad_DefaultValues(t *testing.T) {
 	// Test AI defaults
 	if cfg.AI.Model != "claude-sonnet-4.6" {
 		t.Errorf("Expected default AI.Model='claude-sonnet-4.6', got '%s'", cfg.AI.Model)
+	}
+
+	if cfg.Strategy.EnablePatching {
+		t.Errorf("Expected default Strategy.EnablePatching=false, got true")
 	}
 }
 

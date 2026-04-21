@@ -42,47 +42,184 @@ prepare_repo_for_build() {
     fi
 
     if [ -f "$repo_dir/tools/git-sync-deps" ]; then
-        local max_sync_attempts=3
+        local max_sync_attempts="${GIT_SYNC_DEPS_MAX_ATTEMPTS:-5}"
         local sync_attempt=1
         local sync_ok=false
         local sync_output=""
+        local fallback_output=""
         local sync_status=0
         local empty_repo_count=0
+        local externals_populated=false
+        local rate_limit_count=0
+        local thread_failure_count=0
+        local lock_conflict_count=0
+        local transport_error_count=0
+        local transient_error_count=0
+        local mirror_ref_miss_count=0
+        local backoff_seconds=0
+        local jitter_seconds=0
+        local git_http_connect_timeout="${GIT_HTTP_CONNECT_TIMEOUT:-30}"
+        local git_http_low_speed_time="${GIT_HTTP_LOW_SPEED_TIME:-300}"
+        local git_http_low_speed_limit="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}"
+        local sync_lock_fd=""
+        local sync_lock_file="$repo_dir/.git-sync-deps.lock"
+
+        if ! [[ "$max_sync_attempts" =~ ^[0-9]+$ ]] || [ "$max_sync_attempts" -lt 1 ]; then
+            max_sync_attempts=5
+        fi
+
+        if command -v flock >/dev/null 2>&1; then
+            exec {sync_lock_fd}> "$sync_lock_file" || {
+                print_error "Failed to open dependency sync lock file: $sync_lock_file"
+                return 1
+            }
+            print_info "Waiting for dependency sync lock: $sync_lock_file"
+            if ! flock -w 900 "$sync_lock_fd"; then
+                print_error "Timed out waiting for dependency sync lock"
+                exec {sync_lock_fd}>&-
+                return 1
+            fi
+        fi
 
         while [ "$sync_attempt" -le "$max_sync_attempts" ]; do
             print_info "Running dependency sync: tools/git-sync-deps (attempt $sync_attempt/$max_sync_attempts)"
 
+            if [ -d "$repo_dir/third_party/externals" ]; then
+                local active_git_processes=""
+                local stale_lock_count=0
+                active_git_processes="$(pgrep -af "git .*${repo_dir}/third_party/externals" | grep -v "pgrep -af" || true)"
+                if [ -z "$active_git_processes" ]; then
+                    stale_lock_count=$(find "$repo_dir/third_party/externals" -type f -name '*.lock' -mmin +10 -print -delete 2>/dev/null | wc -l)
+                    if [ "$stale_lock_count" -gt 0 ]; then
+                        print_warn "Removed $stale_lock_count stale git lock file(s) before sync"
+                    fi
+                else
+                    print_warn "Active git processes detected under externals; skipping stale lock cleanup"
+                fi
+            fi
+
             sync_output="$({
                 cd "$repo_dir" && \
+                GIT_CONFIG_COUNT=4 \
+                GIT_CONFIG_KEY_0=url.https://github.com/.insteadof \
+                GIT_CONFIG_VALUE_0=https://chromium.googlesource.com/external/github.com/ \
+                GIT_CONFIG_KEY_1=url.https://github.com/.insteadof \
+                GIT_CONFIG_VALUE_1=https://skia.googlesource.com/external/github.com/ \
+                GIT_CONFIG_KEY_2=url.https://gitlab.com/.insteadof \
+                GIT_CONFIG_VALUE_2=https://chromium.googlesource.com/external/gitlab.com/ \
+                GIT_CONFIG_KEY_3=url.https://gitlab.com/.insteadof \
+                GIT_CONFIG_VALUE_3=https://skia.googlesource.com/external/gitlab.com/ \
+                GIT_HTTP_CONNECT_TIMEOUT="$git_http_connect_timeout" \
+                GIT_HTTP_LOW_SPEED_TIME="$git_http_low_speed_time" \
+                GIT_HTTP_LOW_SPEED_LIMIT="$git_http_low_speed_limit" \
                 GIT_SYNC_DEPS_SKIP_EMSDK=1 \
                 GIT_SYNC_DEPS_SHALLOW_CLONE=1 \
                 GIT_SYNC_DEPS_QUIET=0 \
                 python3 tools/git-sync-deps
             } 2>&1)"
             sync_status=$?
+
+            mirror_ref_miss_count=$(printf "%s\n" "$sync_output" | grep -icE "not our ref|couldn't find remote ref|unadvertised object|reference is not a tree|unable to find.*in upstream" || true)
+            if [ "$sync_status" -ne 0 ] && [ "$mirror_ref_miss_count" -gt 0 ]; then
+                print_warn "Mirror source missing commit hash; retrying this attempt with original dependency URLs"
+                fallback_output="$({
+                    cd "$repo_dir" && \
+                    GIT_HTTP_CONNECT_TIMEOUT="$git_http_connect_timeout" \
+                    GIT_HTTP_LOW_SPEED_TIME="$git_http_low_speed_time" \
+                    GIT_HTTP_LOW_SPEED_LIMIT="$git_http_low_speed_limit" \
+                    GIT_SYNC_DEPS_SKIP_EMSDK=1 \
+                    GIT_SYNC_DEPS_SHALLOW_CLONE=1 \
+                    GIT_SYNC_DEPS_QUIET=0 \
+                    python3 tools/git-sync-deps
+                } 2>&1)"
+                sync_status=$?
+                sync_output="${sync_output}"$'\n'"${fallback_output}"
+            fi
+
             printf "%s\n" "$sync_output"
 
-            empty_repo_count=$(printf "%s\n" "$sync_output" | grep -c "You appear to have cloned an empty repository" || true)
-            if [ "$sync_status" -eq 0 ] && [ "$empty_repo_count" -eq 0 ]; then
-                sync_ok=true
-                print_info "Dependency sync completed successfully"
-                break
+            empty_repo_count=$(printf "%s\n" "$sync_output" | grep -ic "You appear to have cloned an empty repository" || true)
+            rate_limit_count=$(printf "%s\n" "$sync_output" | grep -icE "resource_exhausted|error: 429|http 429|rate limit|too many requests|quotafailure" || true)
+            thread_failure_count=$(printf "%s\n" "$sync_output" | grep -icE "thread failure detected|traceback \(most recent call last\)" || true)
+            lock_conflict_count=$(printf "%s\n" "$sync_output" | grep -icE "\.lock': File exists|unable to create '.*\.lock'" || true)
+            transport_error_count=$(printf "%s\n" "$sync_output" | grep -icE "expected flush after ref listing|expected 'acknowledgments'|connection reset|connection timed out|temporary failure|eof occurred|fatal: early EOF|RPC failed" || true)
+            transient_error_count=$((rate_limit_count + thread_failure_count + lock_conflict_count + transport_error_count))
+
+            externals_populated=false
+            if [ -d "$repo_dir/third_party/externals" ] && [ -n "$(find "$repo_dir/third_party/externals" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+                externals_populated=true
             fi
 
             if [ "$empty_repo_count" -gt 0 ]; then
                 print_warn "Dependency sync produced empty-repository warnings ($empty_repo_count)"
             fi
+            if [ "$rate_limit_count" -gt 0 ]; then
+                print_warn "Dependency sync detected rate-limit errors ($rate_limit_count)"
+            fi
+            if [ "$thread_failure_count" -gt 0 ]; then
+                print_warn "Dependency sync detected thread failure signatures ($thread_failure_count)"
+            fi
+            if [ "$lock_conflict_count" -gt 0 ]; then
+                print_warn "Dependency sync detected lock-file conflicts ($lock_conflict_count)"
+            fi
+            if [ "$transport_error_count" -gt 0 ]; then
+                print_warn "Dependency sync detected transport/protocol errors ($transport_error_count)"
+            fi
+
+            if [ "$sync_status" -eq 0 ] && [ "$externals_populated" = true ] && [ "$transient_error_count" -eq 0 ]; then
+                sync_ok=true
+                print_info "Dependency sync completed successfully"
+                break
+            fi
+
             if [ "$sync_status" -ne 0 ]; then
                 print_warn "Dependency sync exited with code $sync_status"
             fi
+            if [ "$externals_populated" != true ]; then
+                print_warn "Dependency sync did not populate third_party/externals"
+            fi
 
             if [ "$sync_attempt" -lt "$max_sync_attempts" ]; then
-                print_warn "Cleaning dependency cache and retrying sync"
-                rm -rf "$repo_dir/third_party/externals"
+                print_warn "Preparing dependency cache for retry"
+                if [ -d "$repo_dir/third_party/externals" ]; then
+                    local cleaned_repo_count=0
+                    while IFS= read -r dep_dir; do
+                        if [ -z "$dep_dir" ]; then
+                            continue
+                        fi
+                        if [ -d "$dep_dir/.git" ] && ! git -C "$dep_dir" rev-parse HEAD >/dev/null 2>&1; then
+                            rm -rf "$dep_dir"
+                            cleaned_repo_count=$((cleaned_repo_count + 1))
+                        fi
+                    done < <(find "$repo_dir/third_party/externals" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+                    if [ "$cleaned_repo_count" -gt 0 ]; then
+                        print_warn "Removed $cleaned_repo_count incomplete dependency repo(s) before retry"
+                    fi
+                fi
+
+                if [ "$sync_attempt" -eq $((max_sync_attempts - 1)) ]; then
+                    print_warn "Final retry path: resetting third_party/externals for a clean sync"
+                    rm -rf "$repo_dir/third_party/externals"
+                fi
+
+                backoff_seconds=$((20 * (2 ** (sync_attempt - 1))))
+                if [ "$backoff_seconds" -gt 240 ]; then
+                    backoff_seconds=240
+                fi
+                jitter_seconds=$((RANDOM % 11))
+                backoff_seconds=$((backoff_seconds + jitter_seconds))
+                print_warn "Retrying dependency sync after ${backoff_seconds}s backoff"
+                sleep "$backoff_seconds"
             fi
 
             sync_attempt=$((sync_attempt + 1))
         done
+
+        if [ -n "$sync_lock_fd" ]; then
+            flock -u "$sync_lock_fd" 2>/dev/null || true
+            exec {sync_lock_fd}>&-
+        fi
 
         if [ "$sync_ok" != true ]; then
             print_error "Dependency sync failed after $max_sync_attempts attempts; aborting run"
@@ -146,6 +283,32 @@ find_ossfuzz_project() {
     fi
 
     echo ""
+}
+
+# Validate that workspace contains required fuzz-tooling assets.
+validate_workspace_fuzz_tooling() {
+    local workspace_dir="$1"
+    local helper_path="$workspace_dir/fuzz-tooling/infra/helper.py"
+    local projects_dir="$workspace_dir/fuzz-tooling/projects"
+    local dockerfile_path=""
+
+    if [ ! -f "$helper_path" ]; then
+        print_error "Missing required OSS-Fuzz helper: $helper_path"
+        print_error "This workspace cannot build fuzzers without fuzz-tooling infrastructure."
+        print_info "Use --with-oss-fuzz (optionally with --project NAME) or provide a workspace with fuzz-tooling/infra."
+        return 1
+    fi
+
+    dockerfile_path="$(find "$projects_dir" -mindepth 2 -maxdepth 2 -type f -name 'Dockerfile' -print -quit 2>/dev/null || true)"
+    if [ -z "$dockerfile_path" ]; then
+        print_error "No project Dockerfile found under $projects_dir"
+        print_error "Unable to determine project build configuration."
+        print_info "Use --with-oss-fuzz (optionally with --project NAME) or populate fuzz-tooling/projects manually."
+        return 1
+    fi
+
+    print_info "Validated fuzz-tooling assets: $(dirname "$dockerfile_path")"
+    return 0
 }
 
 # Prompt user for API keys
@@ -387,6 +550,8 @@ check_environment() {
     local _OVERRIDE_FUZZER_PER_TIMEOUT="$FUZZER_PER_FUZZER_TIMEOUT_MINUTES"
     local _HAS_AI_MODEL="${AI_MODEL+1}"
     local _OVERRIDE_AI_MODEL="$AI_MODEL"
+    local _HAS_STRATEGY_ENABLE_PATCHING="${STRATEGY_ENABLE_PATCHING+1}"
+    local _OVERRIDE_STRATEGY_ENABLE_PATCHING="$STRATEGY_ENABLE_PATCHING"
 
     # Load .env file
     set -a
@@ -404,6 +569,9 @@ check_environment() {
     fi
     if [ -n "$_HAS_AI_MODEL" ]; then
         export AI_MODEL="$_OVERRIDE_AI_MODEL"
+    fi
+    if [ -n "$_HAS_STRATEGY_ENABLE_PATCHING" ]; then
+        export STRATEGY_ENABLE_PATCHING="$_OVERRIDE_STRATEGY_ENABLE_PATCHING"
     fi
 
     # Check if at least one API key is set
@@ -440,6 +608,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --in-place      Run directly without copying workspace"
+    echo "  --pov-only      Disable patch generation and run POV/ASAN-focused flow"
     echo "  --with-oss-fuzz Enable OSS-Fuzz project clone/bootstrap for new workspace"
     echo "  --project NAME  Specify OSS-Fuzz project name (if different from repo name)"
     echo "  -b COMMIT       Base commit ID (for delta scan)"
@@ -448,7 +617,8 @@ show_usage() {
     echo "Examples:"
     echo "  $0 git@github.com:libexpat/libexpat.git                                # Full scan from git"
     echo "  $0 --with-oss-fuzz git@github.com:libexpat/libexpat.git                # Full scan + OSS-Fuzz bootstrap"
-    echo "  $0 -b abc123 -d def456 git@github.com:libexpat/libexpat.git           # Delta scan with base and delta commits"
+    echo "  $0 -b abc123 -d def456 git@github.com:libexpat/libexpat.git           # Delta scan (runs BASE commit with BASE..DELTA diff context)"
+    echo "  $0 --pov-only -b abc123 -d def456 git@github.com:libexpat/libexpat.git # Delta scan with POV-only (no patching)"
     echo "  $0 --with-oss-fuzz --project expat git@github.com:libexpat/libexpat.git # Specify OSS-Fuzz project"
     echo "  $0 /path/to/workspace                                                  # Use existing workspace"
     echo "  $0 --in-place /path/to/workspace                                       # Run in-place"
@@ -458,6 +628,7 @@ show_usage() {
 
 # Parse arguments
 IN_PLACE=false
+POV_ONLY=false
 WITH_OSS_FUZZ=false
 OSS_FUZZ_PROJECT=""
 BASE_COMMIT=""
@@ -468,6 +639,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --in-place)
             IN_PLACE=true
+            shift
+            ;;
+        --pov-only)
+            POV_ONLY=true
             shift
             ;;
         --with-oss-fuzz)
@@ -515,6 +690,11 @@ if [ -n "$DELTA_COMMIT" ] && [ -z "$BASE_COMMIT" ]; then
     show_usage
 fi
 
+if [ "$POV_ONLY" = true ]; then
+    export STRATEGY_ENABLE_PATCHING=false
+    print_warn "POV-only mode enabled: patch generation disabled"
+fi
+
 # ============================================
 # CASE 1: Project Name - Continue fuzzing existing project
 # ============================================
@@ -550,7 +730,11 @@ if is_project_name "$TARGET"; then
     print_info "Workspace: $WORKSPACE"
     echo ""
 
-    if ! prepare_repo_for_build "$WORKSPACE/repo" ""; then
+    if ! validate_workspace_fuzz_tooling "$WORKSPACE"; then
+        exit 1
+    fi
+
+    if ! prepare_repo_for_build "$WORKSPACE/repo" "$BASE_COMMIT"; then
         exit 1
     fi
 
@@ -558,7 +742,7 @@ if is_project_name "$TARGET"; then
     check_environment
 
     # Continue fuzzing with existing workspace (always in-place)
-    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$WORKSPACE"
+    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL,STRATEGY_ENABLE_PATCHING ./run_crs.sh --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 2: Git URL - Create workspace from scratch
@@ -579,10 +763,20 @@ elif is_git_url "$TARGET"; then
         print_info "Reusing existing repository (pulling latest changes)..."
 
         cd "$WORKSPACE/repo"
-        if git pull; then
-            print_info "Repository updated successfully"
+        current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+        if [ -n "$current_branch" ]; then
+            if git pull --ff-only; then
+                print_info "Repository updated successfully on branch '$current_branch'"
+            else
+                print_warn "Failed to pull updates on branch '$current_branch', continuing with existing repository"
+            fi
         else
-            print_warn "Failed to pull updates, continuing with existing repository"
+            print_warn "Repository is in detached HEAD; skipping git pull and fetching remote refs instead"
+            if git fetch --all --tags --prune; then
+                print_info "Fetched latest remote refs (detached HEAD preserved)"
+            else
+                print_warn "Failed to fetch remote refs, continuing with existing repository"
+            fi
         fi
         cd "$SCRIPT_DIR"
     else
@@ -598,8 +792,17 @@ elif is_git_url "$TARGET"; then
         fi
     fi
 
-    # Check if fuzz-tooling already exists
+    # Check if fuzz-tooling already exists and is complete enough to reuse.
+    has_fuzz_tooling_projects=false
+    has_fuzz_tooling_helper=false
     if [ -d "$WORKSPACE/fuzz-tooling/projects" ] && [ -n "$(ls -A "$WORKSPACE/fuzz-tooling/projects" 2>/dev/null)" ]; then
+        has_fuzz_tooling_projects=true
+    fi
+    if [ -f "$WORKSPACE/fuzz-tooling/infra/helper.py" ]; then
+        has_fuzz_tooling_helper=true
+    fi
+
+    if [ "$has_fuzz_tooling_projects" = true ] && [ "$has_fuzz_tooling_helper" = true ]; then
         print_info "Reusing existing fuzz-tooling from workspace"
     elif [ "$WITH_OSS_FUZZ" = true ]; then
         # Clone oss-fuzz to temp directory
@@ -625,22 +828,39 @@ elif is_git_url "$TARGET"; then
         else
             print_info "Found OSS-Fuzz project: $OSS_FUZZ_PROJECT"
 
-            # Copy only the matching project
+            # Copy only the matching project (replace stale copy if present)
             mkdir -p "$WORKSPACE/fuzz-tooling/projects"
-            cp -r "$OSSFUZZ_TMP/projects/$OSS_FUZZ_PROJECT" "$WORKSPACE/fuzz-tooling/projects/"
+            rm -rf "$WORKSPACE/fuzz-tooling/projects/$OSS_FUZZ_PROJECT"
+            if ! cp -r "$OSSFUZZ_TMP/projects/$OSS_FUZZ_PROJECT" "$WORKSPACE/fuzz-tooling/projects/"; then
+                print_error "Failed to copy OSS-Fuzz project '$OSS_FUZZ_PROJECT' into workspace"
+                rm -rf "$OSSFUZZ_TMP"
+                exit 1
+            fi
 
-            # Copy necessary oss-fuzz infrastructure
-            cp -r "$OSSFUZZ_TMP/infra" "$WORKSPACE/fuzz-tooling/" 2>/dev/null || true
+            # Copy necessary oss-fuzz infrastructure (replace stale/missing infra)
+            rm -rf "$WORKSPACE/fuzz-tooling/infra"
+            if ! cp -r "$OSSFUZZ_TMP/infra" "$WORKSPACE/fuzz-tooling/"; then
+                print_error "Failed to copy OSS-Fuzz infra into workspace"
+                rm -rf "$OSSFUZZ_TMP"
+                exit 1
+            fi
 
             # Cleanup
             rm -rf "$OSSFUZZ_TMP"
             print_info "OSS-Fuzz project copied to workspace"
         fi
     else
+        if [ "$has_fuzz_tooling_projects" = true ] && [ "$has_fuzz_tooling_helper" = false ]; then
+            print_warn "Detected incomplete fuzz-tooling in workspace (missing infra/helper.py)"
+        fi
         if [ -n "$OSS_FUZZ_PROJECT" ]; then
             print_warn "Ignoring --project because --with-oss-fuzz was not provided"
         fi
         print_info "Skipping OSS-Fuzz clone/bootstrap (enable with --with-oss-fuzz)"
+    fi
+
+    if ! validate_workspace_fuzz_tooling "$WORKSPACE"; then
+        exit 1
     fi
 
     # Handle delta scan (generate ref.diff from base and delta commits)
@@ -675,8 +895,17 @@ elif is_git_url "$TARGET"; then
         fi
     fi
 
-    # Ensure workspace repo is at delta commit (if provided) and dependencies are synced.
-    target_commit="${DELTA_COMMIT:-}"
+    if [ -f "$SCRIPT_DIR/vuln.diff" ]; then
+        mkdir -p "$WORKSPACE/diff"
+        if cp "$SCRIPT_DIR/vuln.diff" "$WORKSPACE/diff/vuln.diff"; then
+            print_info "Staged supplemental vulnerability diff: $WORKSPACE/diff/vuln.diff"
+        else
+            print_warn "Failed to stage supplemental vulnerability diff from $SCRIPT_DIR/vuln.diff"
+        fi
+    fi
+
+    # Ensure workspace repo is at base commit (if provided) and dependencies are synced.
+    target_commit="${BASE_COMMIT:-}"
     if ! prepare_repo_for_build "$WORKSPACE/repo" "$target_commit"; then
         exit 1
     fi
@@ -688,7 +917,7 @@ elif is_git_url "$TARGET"; then
     check_environment
 
     # Run CRS with the new workspace (always in-place since we just created it)
-    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$WORKSPACE"
+    cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL,STRATEGY_ENABLE_PATCHING ./run_crs.sh --in-place "$WORKSPACE"
 
 # ============================================
 # CASE 3: Local path - Use existing workspace
@@ -701,7 +930,11 @@ else
 
     # If TARGET follows workspace layout, run the same repo preparation.
     if [ -d "$TARGET/repo" ]; then
-        if ! prepare_repo_for_build "$TARGET/repo" ""; then
+        if ! validate_workspace_fuzz_tooling "$TARGET"; then
+            exit 1
+        fi
+
+        if ! prepare_repo_for_build "$TARGET/repo" "$BASE_COMMIT"; then
             exit 1
         fi
     fi
@@ -711,8 +944,8 @@ else
 
     # Pass through to original run_crs.sh
     if [ "$IN_PLACE" = true ]; then
-        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh --in-place "$TARGET"
+        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL,STRATEGY_ENABLE_PATCHING ./run_crs.sh --in-place "$TARGET"
     else
-        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL ./run_crs.sh "$TARGET"
+        cd "$CRS_DIR" && sudo --preserve-env=FUZZER_SELECTED,FUZZER_DISCOVERY_MODE,FUZZER_PER_FUZZER_TIMEOUT_MINUTES,AI_MODEL,STRATEGY_ENABLE_PATCHING ./run_crs.sh "$TARGET"
     fi
 fi

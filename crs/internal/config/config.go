@@ -90,7 +90,7 @@ type StrategyConfig struct {
 	Patch PatchStrategyConfig
 
 	// Enable or disable patching phase
-	EnablePatching bool `envconfig:"STRATEGY_ENABLE_PATCHING" default:"true"`
+	EnablePatching bool `envconfig:"STRATEGY_ENABLE_PATCHING" default:"false"`
 }
 
 // POVStrategyConfig holds POV strategy patterns and selection

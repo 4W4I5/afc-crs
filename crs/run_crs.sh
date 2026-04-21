@@ -36,8 +36,8 @@ if ! "$VENV_DIR/bin/python3" -m ensurepip --upgrade >/dev/null 2>&1; then
 fi
 
 # Python 3.12+ venv may not include setuptools by default; openlit transitively imports pkg_resources.
-if ! "$VENV_DIR/bin/python3" -m pip install -q --upgrade pip setuptools wheel; then
-    echo "ERROR: Failed to bootstrap pip/setuptools/wheel in virtual environment"
+if ! "$VENV_DIR/bin/python3" -m pip install -q --upgrade pip wheel "setuptools<81"; then
+    echo "ERROR: Failed to bootstrap pip/wheel/setuptools<81 in virtual environment"
     exit 1
 fi
 
@@ -57,6 +57,8 @@ _HAS_FUZZER_PER_TIMEOUT="${FUZZER_PER_FUZZER_TIMEOUT_MINUTES+1}"
 _OVERRIDE_FUZZER_PER_TIMEOUT="$FUZZER_PER_FUZZER_TIMEOUT_MINUTES"
 _HAS_AI_MODEL="${AI_MODEL+1}"
 _OVERRIDE_AI_MODEL="$AI_MODEL"
+_HAS_STRATEGY_ENABLE_PATCHING="${STRATEGY_ENABLE_PATCHING+1}"
+_OVERRIDE_STRATEGY_ENABLE_PATCHING="$STRATEGY_ENABLE_PATCHING"
 
 # Load and export .env variables for Python strategies
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -76,6 +78,9 @@ if [ -n "$_HAS_FUZZER_PER_TIMEOUT" ]; then
 fi
 if [ -n "$_HAS_AI_MODEL" ]; then
     export AI_MODEL="$_OVERRIDE_AI_MODEL"
+fi
+if [ -n "$_HAS_STRATEGY_ENABLE_PATCHING" ]; then
+    export STRATEGY_ENABLE_PATCHING="$_OVERRIDE_STRATEGY_ENABLE_PATCHING"
 fi
 
 DATE=$(date +"%Y%m%d_%H%M%S")
@@ -187,3 +192,5 @@ else
     echo "Workspace created at: $WORKSPACE" | tee -a "$LOG_FILE"
 fi
 echo "Full log saved to: $LOG_FILE" | tee -a "$LOG_FILE"
+
+exit "$EXIT_CODE"
